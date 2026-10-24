@@ -28,6 +28,7 @@
 #include "platform/config.hpp"
 #include "platform/paths.hpp"
 #include "platform/ttffont.hpp"
+#include "title_lettering.hpp"
 
 namespace {
 
@@ -215,6 +216,7 @@ TEST(FontPort, EveryTypefaceLoads) {
     ASSERT_NE(message, nullptr);
     ASSERT_NE(menu, nullptr);
     ASSERT_NE(FontPortFace(FontPortTypeface::Board), nullptr);
+    ASSERT_NE(FontPortFace(FontPortTypeface::Title), nullptr);
     float message_m = 0, menu_m = 0, menu_i = 0;
     ASSERT_TRUE(message->GetAdvance('m', message_m));
     ASSERT_TRUE(menu->GetAdvance('m', menu_m));
@@ -275,6 +277,81 @@ TEST(Lettering, ReadsUtf8) {
     }
     const std::vector<char32_t> expected = {'a', 0xE7, 0x2014, 0x1F600, 0xFFFD, '(', 0xFFFD, 0xFFFD};
     EXPECT_EQ(read, expected);
+}
+
+// Every label the title and language menus letter, in every language, is drawn by ChronicleTwoTitle, and none
+// needs narrowing by more than 30% to fit its plate's flat middle.
+TEST(TitleLettering, EveryLabelIsInTheTitleFont) {
+    const ttffont::Face *face = FontPortFace(FontPortTypeface::Title);
+    ASSERT_NE(face, nullptr);
+    int labels = 0;
+    for (const auto table : {TitleLanguageLabels(), TitleMenuLabels(), TitlePushStartLabels()}) {
+        for (const TitleLabel &label : table) {
+            for (const std::string_view text : label.text) {
+                for (std::size_t at = 0; at < text.size();) {
+                    const char32_t c = LetteringNextCharacter(text, at);
+                    float          advance = 0;
+                    EXPECT_TRUE(face->GetAdvance(c, advance)) << text << " U+" << std::hex << static_cast<std::uint32_t>(c);
+                }
+                labels += !text.empty();
+            }
+        }
+    }
+    EXPECT_EQ(labels, 5 + 7 * 5 + 5);
+    for (const TitleLabel &label : TitleMenuLabels()) {
+        for (const std::string_view text : label.text) {
+            EXPECT_GT(166.0f / LetteringAdvance(FontPortTypeface::Title, text), 1971.0f / 64.0f * 0.7f) << text;
+        }
+    }
+}
+
+// A blank plate's nine pieces cover it once: at its own size each lands on the texels it samples, but the middle,
+// which stretches a column of the fill; larger, only the edges and middle stretch.
+TEST(TitleLettering, PlatePiecesTileThePlate) {
+    for (const auto [w, h] : {
+             std::pair{210.0f, 54.0f},
+             std::pair{300.0f, 80.0f}
+    }) {
+        float area = 0;
+        for (const TitlePlatePiece &piece : TitlePlatePieces(302, 256, w, h)) {
+            EXPECT_GE(piece.dst_w, 0.0f);
+            EXPECT_GE(piece.dst_h, 0.0f);
+            EXPECT_LE(piece.dst_x + piece.dst_w, w);
+            EXPECT_LE(piece.dst_y + piece.dst_h, h);
+            area += piece.dst_w * piece.dst_h;
+        }
+        EXPECT_FLOAT_EQ(area, w * h);
+    }
+    const auto pieces = TitlePlatePieces(302, 256, 210.0f, 54.0f);
+    for (std::size_t i = 0; i < pieces.size(); ++i) {
+        const TitlePlatePiece &piece = pieces[i];
+        if (i == 4) {
+            EXPECT_EQ(piece.src_w, 1.0f);
+            continue;
+        }
+        EXPECT_EQ(piece.src_x - 302, piece.dst_x) << i;
+        EXPECT_EQ(piece.src_y - 256, piece.dst_y) << i;
+        EXPECT_EQ(piece.src_w, piece.dst_w) << i;
+        EXPECT_EQ(piece.src_h, piece.dst_h) << i;
+    }
+    const auto larger = TitlePlatePieces(302, 256, 300.0f, 80.0f);
+    for (const std::size_t corner : {0u, 2u, 6u, 8u}) {
+        EXPECT_EQ(larger[corner].dst_w, pieces[corner].dst_w);
+        EXPECT_EQ(larger[corner].dst_h, pieces[corner].dst_h);
+    }
+}
+
+// Only the title atlases' cells are lettered, and only with the sharp text font.
+TEST(TitleLettering, OnlyTheTitleCellsAreLettered) {
+    ConfigRoot  config;
+    FontState   state;
+    mgCDrawPrim prim;
+    MySetPrim(&prim, 1, 0);
+    const mgRect<int> cell(0, 0, 210, 54);
+    config.Select("sharp");
+    EXPECT_FALSE(TitleLetteringDraw(prim, 10.0f, 20.0f, cell)); // no texture bound
+    config.Select("original");
+    EXPECT_FALSE(TitleLetteringDraw(prim, 10.0f, 20.0f, cell));
 }
 
 // The rims' profiles: a soft half-pixel edge at their measured radius, and the glow fading out.

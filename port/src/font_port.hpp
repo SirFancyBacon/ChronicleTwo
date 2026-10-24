@@ -23,11 +23,12 @@ struct FontPortPage {
 FontPortPage FontPortPageOf(int language);
 
 // The port's typefaces: ChronicleTwoMessage for the game's text, ChronicleTwoMenu for the pause menu's painted
-// words and ChronicleTwoBoard for its time board's.
+// words, ChronicleTwoBoard for its time board's and ChronicleTwoTitle for the title and language menus' buttons.
 enum class FontPortTypeface {
     Message,
     Menu,
     Board,
+    Title,
 };
 
 // The typeface's font, read from fonts/ beside the executable on first use; null where it is missing, which

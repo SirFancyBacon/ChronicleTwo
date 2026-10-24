@@ -57,3 +57,20 @@ scripts/font/board_font.json:
   the 6's stroke leans straight into its bowl.
 - The font holds only ASCII.
 - It is renamed ChronicleTwoBoard.
+
+ChronicleTwoTitle
+Copyright 2010 The Kosugi Project Authors (https://github.com/googlefonts/kosugi)
+
+ChronicleTwoTitle-Regular.ttf is a modified version of ChronicleTwoMessage-Regular.ttf, itself a modified
+version of Kosugi 4.002 by MOTOYA, licensed under the Apache License, Version 2.0 (LICENSE in this directory).
+
+Changes made for ChronicleTwo, by scripts/font/build_menu_font.py from the parameters in
+scripts/font/title_font.json:
+
+- The glyphs are scaled onto the texel grid of Dark Chronicle's title menu buttons (64 units a texel, an em of
+  30.8 texels) and narrowed to 0.716 of their width.
+- Many letters are rescaled, moved or reweighted, their stems kept at their weight, and their advances changed;
+  the round capitals and the N, m and w are wider, the w's legs splay, the descenders are longer and the space
+  narrower; accented letters follow their base letters.
+- The font holds ASCII and the accented letters and marks of ChronicleTwoMessage.
+- It is renamed ChronicleTwoTitle.

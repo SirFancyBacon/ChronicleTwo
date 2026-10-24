@@ -12,6 +12,7 @@
 #include "mg_texture.hpp"
 #include "mglib.hpp"
 #include "mglib_port.hpp"
+#include "title_lettering.hpp"
 
 namespace {
 
@@ -93,6 +94,16 @@ void DrawBackdrop(mgCDrawPrim &prim, mgRect<float> rect, mgRect<int> uv, float a
 }
 
 } // namespace
+
+PORT_OVERRIDE void PrimQuad(mgCDrawPrim *prim, float x, float y, mgRect<int> cell) {
+    if (prim && TitleLetteringDraw(*prim, x, y, cell)) {
+        return;
+    }
+    prim->TextureCrd(cell.left, cell.top);
+    prim->Vertex(x, y, 0.0f);
+    prim->TextureCrd(cell.left + cell.right, cell.top + cell.bottom);
+    prim->Vertex(x + cell.right, y + cell.bottom, 0.0f);
+}
 
 PORT_OVERRIDE void PrimQuad(mgCTexture *texture, float x, float y, mgRect<int> uv,
                             int alpha, int red, int green, int blue) {

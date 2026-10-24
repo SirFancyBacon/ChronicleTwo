@@ -1862,6 +1862,72 @@ figures' heights, and, with the source fonts in `DC2_FONT_SOURCES` or the cache,
 for byte. The pause menu is open
 at frame 365 of `--jump town:10 --fast-load --input tools/input/jump-town-menu-pcsettings.input`.
 
+#### Title lettering
+
+The language menu at boot and the title menu paint their buttons whole: a bronze-framed plate with its label in
+it, 208x52 texels in a 210x54 cell, in `title/lang_select.img` (the five languages, each named in itself) and in
+each language's `title%d.img` atlas (`moji`: New Game, Continue, Install, Options and Extras, the Free Race and
+Spheda practice buttons of the extras menu, and the Push START line). With `video.text_font` sharp,
+`TitleLetteringDraw` (`port/src/title_lettering.cpp`) draws them for every language: the port's
+`PrimQuad(mgCDrawPrim *, float, float, mgRect<int>)` (`port/src/menudraw_primquad.cpp`), which both menus draw
+through, asks it about each cell before writing the sprite. A button becomes a blank plate with its label lettered
+in ChronicleTwoTitle; Push START becomes its line lettered alone. The language menu runs inside `SCElogoFade`,
+before the game's own fonts, messages and gaiji are loaded, so the lettering draws from the TrueType face
+directly.
+
+The blank plate is cut at draw time from the user's own atlas, so no art ships. Every plate of an atlas has the
+same frame; the one whose label is shortest in all five languages (Extras on the title atlas, Italiano on the
+language atlas) holds no lettering left of column 64, from column 140, above row 12 or from row 36, and its
+middle is a flat fill. Its corners and edges are drawn as they are, and column 60 is stretched across the middle
+(`TitlePlatePieces`, nine pieces that also draw a plate of any other size, corners kept and edges stretched).
+The pieces cut the whole 210x54 cell, the empty texel round the plate included, so the plate's edge texels (the
+knob at its foot on the right) lie inside the sprite as retail draws them and filtering does not soften them.
+Outside its lettering, that blank matches every painted plate of all five languages to within 0.0003 of full
+scale. The Options cell starts a texel into its plate and takes a row of the Extras plate's rim below it; the
+blank plate is drawn where the painted plate lies, so its top rim is whole and the stray row is gone.
+
+The buttons were painted in ChronicleTwoMessage's own face, a little narrower, with wider round capitals.
+ChronicleTwoTitle (`scripts/font/title_font.json`) is ChronicleTwoMessage fitted to the English title atlas's
+seven buttons by the same tools as the menu's (`fit_menu_font.py`, its words `centred` in the plate): an em of 30.8
+texels, 0.716 as wide, and its C, O and N a quarter to a third wider, m 31% (its stems thickened back towards the n's) and w 50% wider,
+their stems kept at their weight, with smaller corrections to other letters. New Game's letters were then set by
+hand on the painting's own edges (w, G and m wider, the G, a and m apart as painted, each edge within a texel),
+and the N made 6% taller by eye; the fit lightened the strokes by about a pixel at 1080p, which is halved by eye,
+and the w's outer legs splay 40 units further out at the top, their tips 16 units thicker; the r and a set the
+next letter 28 and 48 units closer, the m is 23 units wider and as tall as the n, set
+apart from the a with the e after it spaced as after the u, and the n's arch peaks a little further left and
+leaves its stem at a gentler angle, by eye. The
+other languages' plates set the rest: their word spaces are narrower than English's, so the space is 1.25 texels
+narrower than the English fit (a texel tighter than English's, a texel wider than the others'); their descenders
+reach deeper, so the g, j, q and y reach two texels deeper, while the p's tail, by eye, ends a
+little short of ChronicleTwoMessage's; and v, b, B and z, which no English button has,
+are fitted to the French, Italian and Spanish plates. An accented letter with no corrections of its own takes its
+base letter's (an é is drawn as the e is). Against their own plates, with each word placed where it is painted,
+the mean per-texel error is 0.016 for English, 0.031 for French and Italian, 0.038 for Spanish and 0.061 for
+German: the other atlases were painted in other cuts (French and Italian bolder, Spanish narrower, German in
+another face), so one font matches English's best. The mean per-texel error over the plates' middles is 0.012, from 0.026 for
+ChronicleTwoMessage at its measured size. The font holds ASCII and every
+accented letter and mark ChronicleTwoMessage has; the source is the port's own font, pinned by its SHA-256, and
+the Apache License carries over. The labels are set as painted: ink centred half a texel left of the plate's
+middle, on the fitted baseline 33.7 texels below its top lowered by a pixel at 1080p, the language atlas's an eighth wider than the title
+atlas's; a label wider than 166 texels is narrowed to fit, as the longest paintings are. They are lit grey (217, 85% white, by eye)
+with a fine near-black (13) stroke half a texel wide, and, as the painting's dark lies mostly right of and below
+its strokes, that shape's shadow cast a texel and a half right and three quarters of one down, shading off to 65%
+as it leaves the letters. The labels' strings are in the port, in each language as its atlas
+paints it. Push START is a 13-texel cap, lit grey (217) with a texel's outline cast a texel right and down as
+well, centred where the painted lines are on the atlas's row 37. The draw's colour tints all of it, so the buttons' dark
+shadow pass, the greyed locked buttons and the fades look as they did. The original text font keeps the
+paintings.
+
+The lettering itself (`LetteringDraw`, `port/src/lettering.cpp`) is shared with the pause menu's: UTF-8 text in a
+typeface and style (fill, rim, shadow), rendered at the target's resolution into one cached image and laid on
+whole target pixels, from its pen or centred on its ink. `Lettering.ReadsUtf8`,
+`TitleLettering.EveryLabelIsInTheTitleFont`, `TitleLettering.PlatePiecesTileThePlate` and
+`TitleLettering.OnlyTheTitleCellsAreLettered` cover the decoding, the labels' characters and fit, the blank
+plate's pieces and the cells lettered; `MenuFont.Check` checks ChronicleTwoTitle's characters and wider capitals
+and that the tools rebuild it byte for byte. The language menu is on screen at frame 500 of a plain start; `--jump
+title` with START at frame 500 shows the title menu at frame 640.
+
 `mgInitFont` returns 0 and `mgCloseFont` does nothing. The port keeps no console, because retail never draws it: `font_draw_flag` is never set.
 
 `--frames N` exits after frame N. `--screenshot PATH` writes that frame as a PNG first; a failed write exits with status 1. `--screenshot` without `--frames` is a usage error. `--input SCRIPT` loads the script at start-up. The pump applies it on each tick with `mgPortFrameCount()`, so pad input follows the game's frame count.

@@ -1,5 +1,5 @@
-"""ChronicleTwoMenu and ChronicleTwoBoard: the shipped fonts' characters and shapes, and that the tools rebuild them
-byte for byte.
+"""ChronicleTwoMenu, ChronicleTwoBoard and ChronicleTwoTitle: the shipped fonts' characters and shapes, and that the
+tools rebuild them byte for byte.
 
 The tests need scripts/font/requirements.txt and skip without it. The rebuild also needs the source fonts, in the
 directory DC2_FONT_SOURCES names or already fetched into ~/.cache/chronicletwo by build_menu_font.py; it skips
@@ -28,7 +28,9 @@ except ImportError as missing:
 def source_paths():
     """{name: path} of every source font, from DC2_FONT_SOURCES or the cache; None where one is missing."""
     named = os.environ.get("DC2_FONT_SOURCES")
-    paths = {name: Path(named) / mnf.SOURCES[name][0] if named else mnf.cached(name) for name in mnf.SOURCES}
+    # The port's own fonts are sources where the port keeps them.
+    paths = {name: Path(named) / file if named and url else mnf.cached(name)
+             for name, (file, url, _) in mnf.SOURCES.items()}
     return paths if all(path.exists() for path in paths.values()) else None
 
 
@@ -120,6 +122,41 @@ class BoardFont(unittest.TestCase):
             self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(),
                              hashlib.sha256(mnf.font_path(self.parameters).read_bytes()).hexdigest())
 
+
+
+@unittest.skipIf(mnf is None, "the font tools' Python packages are not installed")
+class TitleFont(unittest.TestCase):
+    def setUp(self):
+        self.parameters = mnf.load_parameters(mnf.TITLE_PARAMETERS)
+        self.font = TTFont(mnf.font_path(self.parameters))
+        self.cmap = self.font.getBestCmap()
+
+    def test_it_holds_every_character_the_european_text_draws(self):
+        # ASCII, and the accented letters and marks ChronicleTwoMessage draws for French, German, Italian and Spanish:
+        # everything of those it has.
+        message = TTFont(mnf.cached("chronicletwo_message")).getBestCmap()
+        self.assertEqual([ch for ch in mnf.characters(self.parameters) if ord(ch) in message and ord(ch) not in self.cmap],
+                         [])
+        self.assertTrue(all(ord(ch) in self.cmap for ch in "ÀÇÈÉÑÖÜßàçèéíñóöùüŒœ¡¿"))
+        self.assertEqual(self.font["head"].unitsPerEm, round(self.parameters["global"]["em"] * mnf.UNIT))
+
+    def test_the_round_capitals_are_wider_than_the_message_fonts(self):
+        # Their stems keep their weight, so their outlines widen by less than their scale.
+        message = TTFont(mnf.cached("chronicletwo_message"))
+        scale = self.font["head"].unitsPerEm / message["head"].unitsPerEm * self.parameters["global"]["stretch"]
+        for ch in "CNO":
+            title = self.font["glyf"][self.cmap[ord(ch)]]
+            plain = message["glyf"][message.getBestCmap()[ord(ch)]]
+            self.assertGreater(title.xMax - title.xMin, (plain.xMax - plain.xMin) * scale * 1.1, ch)
+
+    @unittest.skipIf(mnf is not None and source_paths() is None,
+                     "the source fonts are neither in DC2_FONT_SOURCES nor cached")
+    def test_the_tools_rebuild_the_shipped_font(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "rebuilt.ttf"
+            build_menu_font.build(self.parameters, out, source_paths())
+            self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(),
+                             hashlib.sha256(mnf.font_path(self.parameters).read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":

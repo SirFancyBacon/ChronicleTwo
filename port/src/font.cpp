@@ -367,6 +367,7 @@ const ttffont::Face *FontPortFace(FontPortTypeface typeface) {
         {.file = "ChronicleTwoMessage-Regular.ttf", .text = "message text"        },
         {.file = "ChronicleTwoMenu-Regular.ttf",    .text = "menu lettering"      },
         {.file = "ChronicleTwoBoard-Regular.ttf",   .text = "time board lettering"},
+        {.file = "ChronicleTwoTitle-Regular.ttf",   .text = "title lettering"     },
     };
     Slot &slot = slots[static_cast<int>(typeface)];
     if (!slot.tried) {

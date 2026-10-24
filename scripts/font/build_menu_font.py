@@ -33,8 +33,8 @@ def build(parameters, out, paths=None):
         glyf = {".notdef": TTGlyphPen(None).glyph()}
         metrics = {".notdef": (units_per_em // 2, 0)}
         cmap = {}
-        for ch in mnf.CHARACTERS:
-            p = parameters["glyphs"].get(ch, {})
+        for ch in mnf.characters(parameters):
+            p = mnf.corrections(parameters, ch)
             name = bmf.glyph_name(ch)
             if p.get("source") != "drawn" and ch not in sources[p.get("source", mnf.default_source(parameters))].advances:
                 continue  # a source without the character: the font leaves it out
@@ -67,7 +67,8 @@ def build(parameters, out, paths=None):
         scale = mnf.base(main, g)[3]
         ascent, descent = round(main.ascent * scale), round(main.descent * scale)
         spec = parameters["sources"][default]
-        weight = spec["weight"] if isinstance(spec, dict) else spec
+        # A static source has no weight of its own to set; it is a regular.
+        weight = (spec["weight"] if isinstance(spec, dict) else spec) or 400
 
     builder = FontBuilder(units_per_em, isTTF=True)
     builder.setupGlyphOrder(order)
@@ -85,8 +86,8 @@ def build(parameters, out, paths=None):
         "version": f"Version {VERSION}",
         "psName": f"{family}-Regular",
         "description": parameters["description"],
-        "licenseDescription": "This Font Software is licensed under the SIL Open Font License, Version 1.1.",
-        "licenseInfoURL": "https://openfontlicense.org",
+        "licenseDescription": parameters.get("license", "This Font Software is licensed under the SIL Open Font License, Version 1.1."),
+        "licenseInfoURL": parameters.get("license_url", "https://openfontlicense.org"),
     })
     builder.setupOS2(sTypoAscender=ascent, sTypoDescender=descent, sTypoLineGap=0, usWinAscent=ascent,
                      usWinDescent=-descent, sxHeight=glyf[bmf.glyph_name("x")].yMax,

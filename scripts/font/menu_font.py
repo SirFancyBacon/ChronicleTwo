@@ -14,6 +14,7 @@ import math
 import os
 import sys
 import tempfile
+import unicodedata
 import urllib.request
 from pathlib import Path
 
@@ -29,6 +30,7 @@ import message_font as mf  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PARAMETERS = Path(__file__).resolve().parent / "menu_font.json"
 BOARD_PARAMETERS = Path(__file__).resolve().parent / "board_font.json"
+TITLE_PARAMETERS = Path(__file__).resolve().parent / "title_font.json"
 FONT = ROOT / "port/assets/fonts/ChronicleTwoMenu-Regular.ttf"
 LAYOUT = ROOT / "port/gameplay/menu/1/men0.pac/menu0.cfg.json"  # the English menu's cells
 
@@ -70,6 +72,9 @@ SOURCES = {
                  "https://raw.githubusercontent.com/google/fonts/d714b17ce2379f06daf6295617f961df605dccb5/"
                  "ofl/mplus1p/MPLUS1p-Regular.ttf",
                  "2f294ad496432b1608f070d310e3aa2adcf1de4af429f4901df97ec4bd361ed1"),
+    # The port's own message font (Apache License 2.0), read from port/assets/fonts rather than fetched.
+    "chronicletwo_message": ("ChronicleTwoMessage-Regular.ttf", None,
+                             "d4b63a196a5eda346cabae7afcba9b6f055db73309ff0d1830a658b182d8a44b"),
 }
 
 # The words the English atlas paints, by the name of their cell.
@@ -90,7 +95,10 @@ GLYPH_DEFAULTS = {"kx": 1.0, "ky": 1.0, "tx": 0.0, "ty": 0.0, "shear": 0.0, "wei
 
 
 def cached(name):
-    """Where source `name` is cached; it may not be there yet."""
+    """Where source `name` is cached (the port's own fonts are where the port keeps them); it may not be there
+    yet."""
+    if SOURCES[name][1] is None:
+        return ROOT / "port/assets/fonts" / SOURCES[name][0]
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "chronicletwo" / SOURCES[name][0]
 
 
@@ -99,7 +107,7 @@ def source_path(name, path=None):
     file, url, sha256 = SOURCES[name]
     if path is None:
         path = cached(name)
-        if not path.exists():
+        if not path.exists() and url is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             with urllib.request.urlopen(url) as response:
                 path.write_bytes(response.read())
@@ -124,8 +132,8 @@ class Sources(dict):
             file = prepared(source_path(name, (paths or {}).get(name)), spec["weight"], parameters.get("flare"),
                             rounding)
             self.files.append(file)
-            warps = {ch: p["warp"] for ch, p in parameters["glyphs"].items()
-                     if "warp" in p and p.get("source", default) == name}
+            warps = {ch: p["warp"] for ch in set(parameters["glyphs"]) | set(characters(parameters))
+                     if "warp" in (p := corrections(parameters, ch)) and p.get("source", default) == name}
             self[name] = MenuSource(file, warps)
             self[name].scale = {k: spec[k] for k in ("em", "stretch") if k in spec}
 
@@ -150,6 +158,21 @@ def load_parameters(path=PARAMETERS):
 def font_path(parameters):
     """Where a font's parameters build it."""
     return ROOT / "port/assets/fonts" / f"{parameters['family']}-Regular.ttf"
+
+
+def characters(parameters):
+    """The characters a font holds: ASCII, and the parameters' "extra_characters"."""
+    return CHARACTERS + list(parameters.get("extra_characters", ""))
+
+
+def corrections(parameters, ch):
+    """A letter's corrections: its own, or where it has none, those of the letter it is accented from, so an é is
+    drawn as its e is."""
+    glyphs = parameters["glyphs"]
+    if ch in glyphs:
+        return glyphs[ch]
+    base = unicodedata.normalize("NFD", ch)[0]
+    return glyphs.get(base, {}) if base != ch else {}
 
 
 def default_source(parameters):
@@ -549,6 +572,14 @@ def letter(source, ch, g, p):
     return affine, strength, advance
 
 
+def advance_of(sources, ch, parameters):
+    """How far ch moves the pen in master units, as render_word sets it."""
+    p = corrections(parameters, ch)
+    if p.get("source") == "drawn":
+        return p["drawn"]["advance"]
+    return letter(sources[p.get("source", default_source(parameters))], ch, parameters["global"], p)[2]
+
+
 def render_word(sources, word, parameters, width=CELL_W, height=CELL_H):
     """Coverage (0 to 255) of a word set in its cell, as the fitted font draws it."""
     default = default_source(parameters)
@@ -560,9 +591,12 @@ def render_word(sources, word, parameters, width=CELL_W, height=CELL_H):
     frac = baseline - math.floor(baseline)
     row = math.floor(baseline)
     pen = (g["start"] + dx) * UNIT
+    if parameters.get("centred"):
+        # Words centred in their cells: "start" is the middle, which the word's advances straddle.
+        pen -= sum(advance_of(sources, ch, parameters) for ch in word) / 2
     out = np.zeros((height, width), np.float32)
     for ch in word:
-        p = parameters["glyphs"].get(ch, {})
+        p = corrections(parameters, ch)
         page = (1, 0, 0, 1, pen, -frac * UNIT)
         if p.get("source") == "drawn":
             cover = drawn(p["drawn"]).coverage(mf.PART, mf.IDENTITY, (0.0, 0.0), page, row, width, height)
@@ -604,9 +638,37 @@ def _rects(layout=LAYOUT):
     raise SystemExit(f"{layout}: no mnmain sheet")
 
 
+# The English title atlas's buttons (moji in title1.img): each label's cell, and the row its plate starts on.
+TITLE_BUTTONS = {"New Game": (302, 40, 41), "Continue": (302, 94, 95), "Install": (302, 148, 149),
+                 "Options": (302, 204, 203), "Extras": (302, 256, 257), "Free Race": (92, 202, 203),
+                 "Spheda Practice Area": (92, 256, 257)}
+# A plate is 208 by 52 texels; its lettering lies in its flat middle, lit 230 over a fill of 57.
+PLATE_W, PLATE_H = 208, 52
+TITLE_FILL, TITLE_GROUND = 230.0, 57.0
+
+
+def title_targets(extraction):
+    """{label: how lit each texel of its plate's middle is, 0 to 1, between the plate's fill and the lettering's}."""
+    import io
+
+    from PIL import Image
+    atlas = np.array(Image.open(io.BytesIO(extraction.read("textures/title/title1_1.png"))).convert("RGBA"), np.float32)
+    lit = np.clip((atlas[..., :3].mean(2) - TITLE_GROUND) / (TITLE_FILL - TITLE_GROUND), 0, 1)
+    out = {}
+    for text, (x, _, plate_y) in TITLE_BUTTONS.items():
+        plate = lit[plate_y:plate_y + PLATE_H, x + 1:x + 1 + PLATE_W].copy()
+        # The frame is lit too: only the middle, inside its bevels, is lettering.
+        plate[:10], plate[42:], plate[:, :17], plate[:, 191:] = 0, 0, 0, 0
+        out[text] = plate
+    return out
+
+
 def targets(extraction, parameters=None):
     """{text: how lit each texel of its cell is, 0 to 1, between the shadow and the fill}: the pause menu's words,
-    or with board parameters the time board's words and each of its figures."""
+    with board parameters the time board's words and each of its figures, or with title parameters the title
+    menu's buttons."""
+    if (parameters or {}).get("kind") == "title":
+        return title_targets(extraction)
     atlas = _atlas(extraction)
     rects = _rects()
     if (parameters or {}).get("kind") == "board":
