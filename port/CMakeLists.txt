@@ -397,6 +397,24 @@ add_custom_target(ct_glyphs DEPENDS ${CT_GLYPH_COPIES})
 add_dependencies(darkchronicle ct_glyphs)
 install(DIRECTORY assets/glyphs/ DESTINATION ${CMAKE_INSTALL_BINDIR}/glyphs)
 
+# The message font (docs/PC.md "Message font"): port/assets/fonts, copied to fonts/ beside the executable
+# with Kosugi's licence and the notice of what was changed, which travel with it.
+file(GLOB CT_FONT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/*)
+set(CT_FONT_COPIES "")
+foreach(font IN LISTS CT_FONT_SOURCES)
+    get_filename_component(font_name ${font} NAME)
+    set(font_copy ${CMAKE_BINARY_DIR}/fonts/${font_name})
+    add_custom_command(OUTPUT ${font_copy}
+        COMMAND ${CMAKE_COMMAND} -E copy ${font} ${font_copy}
+        DEPENDS ${font}
+        COMMENT "Copying the message font file ${font_name}"
+        VERBATIM)
+    list(APPEND CT_FONT_COPIES ${font_copy})
+endforeach()
+add_custom_target(ct_fonts DEPENDS ${CT_FONT_COPIES})
+add_dependencies(darkchronicle ct_fonts)
+install(DIRECTORY assets/fonts/ DESTINATION ${CMAKE_INSTALL_BINDIR}/fonts)
+
 option(CT_BUILD_TESTS "Build darkchronicle_tests" ON)
 if(CT_BUILD_TESTS)
     add_subdirectory(src/tests)

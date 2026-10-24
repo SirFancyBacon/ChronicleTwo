@@ -272,7 +272,7 @@ constexpr int kFrameCorner = 23;
 constexpr int kFloatingTail = 13;
 // - a character is drawn from its pen (DrawFont, nd_meswin.cpp:3830-3962): gaiji 0xFD21 starts 6
 //   left of it (DrawGaiji_sub, font.cpp:1181, 1197), and outlines and sharp text reach 2
-//   (set2DSprite_Fuchi, port/src/font.cpp DrawSharp).
+//   (set2DSprite_Fuchi, port/src/font.cpp set2DSpriteEasyFont).
 constexpr int kGlyphReach = 6;
 // - the choice cursor's goal is 40 and half a character left of the text (ClsMes::SetGoalCursorXY,
 //   nd_meswin.cpp:3984), and it sways 6 more (ClsMes::DrawSelectCursor, nd_meswin.cpp:4075); its

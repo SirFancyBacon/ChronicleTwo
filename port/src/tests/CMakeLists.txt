@@ -36,6 +36,13 @@ target_include_directories(darkchronicle_tests PRIVATE ${CMAKE_CURRENT_BINARY_DI
 ct_link_game(darkchronicle_tests)
 kz_port_tests(darkchronicle_tests)
 target_link_libraries(darkchronicle_tests PRIVATE GTest::gtest nlohmann_json::nlohmann_json)
+# The painter's page geometry is checked against the numbers the font was fitted with.
+target_compile_definitions(darkchronicle_tests PRIVATE
+    CT_MESSAGE_FONT_PARAMETERS="${CMAKE_SOURCE_DIR}/scripts/font/message_font.json")
+
+# The shipped message font: its grid and coverage, and, with Kosugi at hand, that the tools rebuild it
+# byte for byte. Skips without the tools' Python packages (scripts/font/requirements.txt).
+add_test(NAME MessageFont.Check COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/font/test_message_font.py)
 
 # A case is a unit test: it finishes in milliseconds, and one that does not is cut off. The clock
 # cases measure short sleeps, which the parallel gfx cases skew, so they run on their own. The cases that compile

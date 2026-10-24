@@ -1,0 +1,15 @@
+ChronicleTwoMessage
+Copyright 2010 The Kosugi Project Authors (https://github.com/googlefonts/kosugi)
+
+ChronicleTwoMessage-Regular.ttf is a modified version of Kosugi 4.002 by MOTOYA, licensed under the
+Apache License, Version 2.0 (LICENSE in this directory).
+
+Changes made for ChronicleTwo, by scripts/font/build_message_font.py from the parameters in
+scripts/font/message_font.json:
+
+- The glyphs are moved onto the 16x20-pixel cell grid of Dark Chronicle's message font (1280 units an
+  em, 64 a pixel), and many are rescaled, moved or slanted, their stems kept at their weight.
+- Accented letters, ß, ¡, ¿, ª, º, Æ, æ, Œ, œ and the half-width quotes are composed from Kosugi's own
+  glyphs; the cedilla is a stroke drawn for this font.
+- The font holds only the characters the game's European and English text draws.
+- It is renamed ChronicleTwoMessage.

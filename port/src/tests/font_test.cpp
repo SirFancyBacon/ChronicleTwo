@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -17,9 +19,11 @@
 #include "mainloop.hpp"
 #include "mg_drawprim_port.hpp"
 #include "mglib.hpp"
+#include "mglib_port.hpp"
 #include "nd_meswin.hpp"
 #include "platform/config.hpp"
 #include "platform/paths.hpp"
+#include "platform/ttffont.hpp"
 
 namespace {
 
@@ -30,6 +34,22 @@ std::array<std::uint8_t, 188> AsciiTable() {
         table[i * 2 + 1] = 0x20;
     }
     return table;
+}
+
+// The retail tables' half-width entries: ASCII from the space to the tilde, without the backslash.
+std::vector<std::uint8_t> RetailAsciiTable() {
+    std::vector<std::uint8_t> table;
+    for (int c = 0x20; c <= 0x7E; ++c) {
+        if (c != '\\') {
+            table.push_back(static_cast<std::uint8_t>(c));
+            table.push_back(0x20);
+        }
+    }
+    return table;
+}
+
+std::filesystem::path ShippedFont() {
+    return PathsExecutable().parent_path() / "fonts" / "ChronicleTwoMessage-Regular.ttf";
 }
 
 using Entry = std::tuple<int, int, int, unsigned, int>;
@@ -76,30 +96,89 @@ struct FontState {
 
 } // namespace
 
-TEST(FontPort, MapsOnlyVerifiedAsciiTableEntries) {
+TEST(FontPort, MapsEveryPalFontPage) {
     auto table = AsciiTable();
-    for (int i = 0; i < 94; ++i) {
-        EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, i, table), static_cast<char32_t>(i + 0x20));
+    for (int language = LANG_ENGLISH; language <= LANG_SPANISH; ++language) {
+        for (int i = 0; i < 94; ++i) {
+            EXPECT_EQ(FontPortCharacter(language, i, table), static_cast<char32_t>(i + 0x20));
+        }
     }
+    // The European pages: alphabetical_chara_tbl's letters, then FontGaijiConvTbl's symbols.
+    EXPECT_EQ(FontPortCharacter(LANG_FRENCH, FONT_NO_ALPHABETICAL_TOP, table), char32_t{0xA1});      // ¡
+    EXPECT_EQ(FontPortCharacter(LANG_GERMAN, FONT_NO_ALPHABETICAL_TOP + 32, table), char32_t{0xDF}); // ß
+    EXPECT_EQ(FontPortCharacter(LANG_SPANISH, FONT_NO_FONT_GAIJI_TOP - 1, table), char32_t{0x153});  // œ
+    EXPECT_EQ(FontPortCharacter(LANG_ITALIAN, FONT_NO_FONT_GAIJI_TOP, table), char32_t{0x25CB});     // ○
+    EXPECT_EQ(FontPortCharacter(LANG_FRENCH, FONT_NO_FONT_GAIJI_TOP + 19, table), char32_t{0xFF65}); // half-width ・
+    EXPECT_EQ(FontPortCharacter(LANG_FRENCH, FONT_NO_FONT_GAIJI_END - 1, table), char32_t{0x2019});  // ’
+    EXPECT_EQ(FontPortCharacter(LANG_FRENCH, FONT_NO_FONT_GAIJI_END, table), 0u);
+
+    // The English page: its full-width symbols by their Shift-JIS codes; kana and kanji keep the bitmap.
+    std::array<std::uint8_t, 2 * 5> english = {'A', ' ', 0x81, 0x79, 0x81, 0x67, 0x82, 0xA0, 0x88, 0x9F};
+    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 0, english), char32_t{'A'});
+    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 1, english), char32_t{0x3010}); // 【
+    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 2, english), char32_t{0xE001}); // the full-width “
+    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 3, english), 0u);               // あ
+    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 4, english), 0u);               // a kanji
+    EXPECT_EQ(FontPortCharacter(LANG_FRENCH, 1, english), 0u);                // a European page draws no Shift-JIS symbols
+
     EXPECT_EQ(FontPortCharacter(LANG_JAPANESE, 33, table), 0u);
     EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, -1, table), 0u);
     EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 94, table), 0u);
-    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 0xfd06, table), 0u);
-    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 0xff00, table), 0u);
     EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 3, {table.data(), 3}), 0u);
-    table[1] = 0x81;
-    EXPECT_EQ(FontPortCharacter(LANG_ENGLISH, 0, table), 0u);
+}
+
+TEST(FontPort, PageGeometryIsTheFittedOne) {
+    std::ifstream file(CT_MESSAGE_FONT_PARAMETERS);
+    ASSERT_TRUE(file);
+    const auto english = nlohmann::json::parse(file)["english_page"];
+    const auto affine = english["affine"];
+    const auto page = FontPortPageOf(LANG_ENGLISH);
+    EXPECT_FLOAT_EQ(page.texels_per_unit_x, affine[0].get<float>() / 64.0f);
+    EXPECT_FLOAT_EQ(page.texels_per_unit_y, affine[3].get<float>() / 64.0f);
+    EXPECT_FLOAT_EQ(page.pen_x, affine[4].get<float>() / 64.0f);
+    EXPECT_FLOAT_EQ(page.baseline, english["baseline"].get<float>() - affine[5].get<float>() / 64.0f);
+    for (int language : {LANG_FRENCH, LANG_GERMAN, LANG_ITALIAN, LANG_SPANISH}) {
+        const auto european = FontPortPageOf(language);
+        EXPECT_FLOAT_EQ(european.texels_per_unit_x, 1.0f / 64.0f);
+        EXPECT_FLOAT_EQ(european.baseline, 16.0f);
+    }
+}
+
+// Every character the painter can ask for is in the shipped font, so no cell falls back to its bitmap.
+TEST(FontPort, EveryMappedCharacterIsInTheShippedFont) {
+    ASSERT_TRUE(ttffont::Load(ShippedFont()));
+    std::vector<unsigned char> alpha;
+    int                        w, h, x0, y0;
+    auto                       draws = [&](char32_t ch) {
+        return ch == 0x20 || ch == 0x3000 || ttffont::RenderGlyph(ch, 20.0f, 20.0f, 0.0f, 0.0f, alpha, w, h, x0, y0);
+    };
+    const auto ascii = RetailAsciiTable();
+    ASSERT_EQ(ascii.size() / 2, static_cast<std::size_t>(FONT_NO_ALPHABETICAL_TOP));
+    for (int no = 0; no < FONT_NO_FONT_GAIJI_END; ++no) {
+        const char32_t ch = FontPortCharacter(LANG_FRENCH, no, ascii);
+        ASSERT_NE(ch, 0u) << no;
+        EXPECT_TRUE(draws(ch)) << "font number " << no;
+    }
+    std::vector<std::uint8_t> codes;
+    for (int code = 0x8140; code <= 0x82FF; ++code) {
+        codes.push_back(static_cast<std::uint8_t>(code >> 8));
+        codes.push_back(static_cast<std::uint8_t>(code));
+    }
+    int mapped = 0;
+    for (int no = 0; no < static_cast<int>(codes.size() / 2); ++no) {
+        if (const char32_t ch = FontPortCharacter(LANG_ENGLISH, no, codes)) {
+            ++mapped;
+            EXPECT_TRUE(draws(ch)) << "Shift-JIS " << std::hex << (0x8140 + no);
+        }
+    }
+    EXPECT_EQ(mapped, 119);
 }
 
 TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
-    const char *file = SettingsEnv("TEST_FONT");
-    if (!file || !std::filesystem::is_regular_file(PathsFromUtf8(file))) {
-        GTEST_SKIP() << "TEST_FONT must name a trusted test font";
-    }
     const auto root = std::filesystem::temp_directory_path() /
                       ("dc2_font_" + std::to_string(dc::test::ProcessId()));
     ASSERT_FALSE(std::filesystem::exists(root));
-    std::filesystem::create_directories(root / "saves" / "lang");
+    std::filesystem::create_directories(root / "saves");
 
     struct Cleanup {
         std::filesystem::path root;
@@ -110,7 +189,6 @@ TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
         }
     } cleanup{root};
 
-    std::filesystem::copy_file(PathsFromUtf8(file), root / "saves" / "lang" / "font.ttf");
     PathsSetSaveRoot(root / "saves");
     auto select = [&](const char *choice) {
         std::ofstream(root / "config.json") << R"({"video":{"text_font":")" << choice << "\"}}";
@@ -175,28 +253,38 @@ TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
     EXPECT_EQ(Entries(mes), tokenized);
     EXPECT_TRUE(std::ranges::any_of(tokenized, [](const Entry &e) { return std::get<0>(e) == MES_CODE_PAGE; }));
 
-    // The sharp silhouette supplies every retail outline style and the fill's alpha multiplication.
+    // Retail's outline code draws each style's passes through the painter, the fill last with its alpha
+    // multiplied, each a quad of the glyph's image on whole pixels inside the cell.
     constexpr std::array<int, 9> passes = {1, 2, 2, 5, 3, 2, 5, 4, 13};
     char                         letter[] = "W";
     font.SetColor(23, 45, 67, 96);
     font.alpha = 64;
+    const auto mapping = gfx::GetUiMapping(mgPortCurrentTarget());
+    auto       on_pixel = [](float logical, float scale, float offset) {
+        const float pixel = logical * scale + offset;
+        return std::abs(pixel - std::round(pixel)) < 0.01f;
+    };
     for (int style = 0; style < FUCHI_NUM; ++style) {
         geometry.clear();
         textures.clear();
         font.SetFuchi(style);
         font.DrawDirect(letter, 40, 30);
-        ASSERT_EQ(geometry.size(), 1u);
-        EXPECT_EQ(geometry[0].size(), static_cast<std::size_t>(passes[style] * 4));
-        const auto &fill = geometry[0][geometry[0].size() - 4];
-        EXPECT_EQ(fill.color[0], 23);
-        EXPECT_EQ(fill.color[1], 45);
-        EXPECT_EQ(fill.color[2], 67);
-        EXPECT_EQ(fill.color[3], 48);
-        const auto texture = gfx::GetTextureInfo(textures[0]);
+        ASSERT_EQ(geometry.size(), static_cast<std::size_t>(passes[style])) << "style " << style;
+        const auto &fill = geometry.back();
+        ASSERT_EQ(fill.size(), 4u);
+        EXPECT_EQ(fill[0].color[0], 23);
+        EXPECT_EQ(fill[0].color[1], 45);
+        EXPECT_EQ(fill[0].color[2], 67);
+        EXPECT_EQ(fill[0].color[3], 48);
+        const auto texture = gfx::GetTextureInfo(textures.back());
         ASSERT_TRUE(texture.has_value());
-        const auto &right = geometry[0][geometry[0].size() - 3];
-        EXPECT_GE(texture->width - 2, (right.x - fill.x) * 2.25f);
-        EXPECT_GE(fill.x, 40.0f);
-        EXPECT_LE(right.x, 48.0f);
+        // One texel a target pixel, on whole pixels: nothing is resampled.
+        EXPECT_NEAR(static_cast<float>(texture->width), (fill[1].x - fill[0].x) * mapping.scale_x, 0.01f);
+        EXPECT_NEAR(static_cast<float>(texture->height), (fill[2].y - fill[1].y) * mapping.scale_y, 0.01f);
+        EXPECT_TRUE(on_pixel(fill[0].x, mapping.scale_x, mapping.offset_x));
+        EXPECT_TRUE(on_pixel(fill[0].y, mapping.scale_y, mapping.offset_y));
+        // Inside the half cell at 40, give or take the border and the English page's pen, left of the cell.
+        EXPECT_GE(fill[0].x, 39.0f);
+        EXPECT_LE(fill[1].x, 49.0f);
     }
 }

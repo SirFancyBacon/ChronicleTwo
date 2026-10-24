@@ -4,7 +4,7 @@
 
 The port runs the retail main loop on the shared renderer and mixer, reading extracted PAL disc files. Supported checkpoints include the boot movies, title, costume selection, opening event, Palm Brinks exploration and the first Underground Channel floor. Town and dungeon movement, inventory item use, chapter resources, menus, photos and save/continue have native implementations and bounded replay fixtures. These checkpoints do not establish a complete campaign or every sub-game; the fish race still aborts at its unimplemented loop.
 
-The PC controls include keyboard menu navigation, mouse menus and item drag/drop, town, dungeon and Georama mouse camera control, optional wheel zoom, a PC settings page, JSON save files and Georama towns without a part limit. Sharp ASCII font rendering is an opt-in prototype, off by default. Presentation can interpolate between logic frames independently of the display rate. Ordinary boots leave debug controls disabled; `game.debug_mode=true` or `--jump` enables them explicitly.
+The PC controls include keyboard menu navigation, mouse menus and item drag/drop, town, dungeon and Georama mouse camera control, optional wheel zoom, a PC settings page, JSON save files and Georama towns without a part limit. An optional sharp message font draws the game's own letters as outlines at any resolution. Presentation can interpolate between logic frames independently of the display rate. Ordinary boots leave debug controls disabled; `game.debug_mode=true` or `--jump` enables them explicitly.
 
 ## Building and running
 
@@ -1665,31 +1665,77 @@ When the controller speaker's device (see "Controller speaker") has four channel
 
 ### Font and headless
 
-#### Optional sharp text
+#### Message font
 
-`video.text_font` is `"original"` by default. In **Options → PC SETTINGS → Display**, set **Text font**
-to **Sharp**, or set `"sharp"` in the `config.json` beside the save folder. Put a trusted TrueType font at
-`<save>/lang/font.ttf` to try sharp ASCII dialogue and menu text. `lang/font.ttf` beside the
-executable is the fallback location. Restart after changing the font file; toggling Original/Sharp
-applies on the next drawn text without a restart.
-No font file is bundled by this feature. A missing or unusable font keeps the original text and reports
-the fallback once on stderr.
+`video.text_font` chooses how the game's text is drawn. `"original"`, the default, draws the retail
+font pages, 16x20-texel cells stretched to the screen. `"sharp"` (**Options → PC SETTINGS → Display →
+Text font**) draws the same letters as outlines from ChronicleTwoMessage, rasterized at the target's
+own resolution. The setting applies to the next drawn text.
 
-This is an experimental painter for the existing text cells: glyph advances, line and page breaks,
-message reveal timing and controller behavior are unchanged. It does not use the font's kerning or
-advances to reposition text. Accented characters, Japanese, symbols, button icons, small-font mode,
-stylized sprite digits and pictures of text retain their original rendering. A different font can
-change the weight and appearance of letters even though their layout stays the same.
+ChronicleTwoMessage (`port/assets/fonts/ChronicleTwoMessage-Regular.ttf`, copied to `fonts/` beside
+the executable with Kosugi's Apache 2.0 licence and a notice of the changes) is made from Kosugi, the
+open release of a MOTOYA gothic. Measured against the retail pages, Kosugi matches their design far
+better than any other open font tried; the retail font is very likely a MOTOYA gothic itself (it
+draws ß as an upright β, as Japanese fonts do). The font is laid out on the retail cell grid: 64 units
+a texel, 1280 an em, the pen at the cell's left edge on row 16, half-width cells 512 units wide and
+full-width 1024. A cell maps onto it directly, with no fitting at run time.
 
-Glyphs are rasterized through Kazarov at the target's UI scale, rounded up to eight-pixel em buckets.
-The prototype keeps immutable glyph images for the renderer's lifetime, so recorded frames never
-sample overwritten atlas cells. Its 16 MiB pixel-cache budget and 2048-entry limit fall back to retail
-for new glyph sizes when exhausted; restarting clears the cache. Very large sizes above a 512-pixel
-em also retain the original glyph. Font files are opt-in local inputs, not validated downloads.
+Every font cell the game draws, from `CFont::DrawChar`, its outlines and shadows and the event
+stopwatch, reaches `set2DSpriteEasyFont`, which `port/src/font.cpp` replaces. The cell's texture
+rectangle gives its font number; `FontPortCharacter` turns that into a character from the language's
+font table:
 
-`FontPortGpu.SharpDrawingKeepsRetailLayoutAndLineBreaks` exercises the original layout functions and
-the sharp painter with a font named by `DC2_TEST_FONT`. Without that fixture the raster/layout test
-is skipped; mapping, config and native submission tests do not require a font file.
+- French, German, Italian and Spanish (`fonttbl_2.bin`): ASCII, the 63 letters of
+  `alphabetical_chara_tbl` (font numbers 0x5E-0x9C) and the 24 symbols of `FontGaijiConvTbl`
+  (0x9D-0xB4). Their half-width middle dot is U+FF65.
+- English (`fonttbl_1.bin`): ASCII and 119 full-width symbols by Shift-JIS code. Where the European
+  page draws a character half-width, the English page's full-width form takes a private code:
+  “ U+E001, ” U+E002, ’ U+E004, ° U+E005.
+
+Kana, kanji, Japanese and the small font keep their bitmaps, as does a cell the font cannot draw.
+Retail's layout is untouched: advances, line and page breaks, reveal timing and outline offsets are
+retail's, because retail code still makes every one of those decisions and the painter only fills the
+cell it is given. Outlines and shadows come out right because `set2DSprite_Fuchi` calls the replaced
+function once per offset, in retail's colours.
+
+`FontPortPageOf` holds how each page draws the font. The European pages draw it as it is. The English
+page draws the same outlines 1.335 times taller and 0.955 times as wide, its pen 0.63 texels left and
+its baseline at row 17.31, which is why its stems look thinner. The painter rasterizes each glyph
+through Kazarov's `ttffont::RenderGlyph` at the exact horizontal and vertical em the cell lands at in
+target pixels, its pen at a quarter pixel and its baseline on a whole pixel, and places the image on
+whole pixels, so nothing is resampled. Glyph images are immutable; past a 32 MiB budget the least
+recently drawn are destroyed, and a frame's list keeps any it still draws alive until it is done.
+
+The font is built by `scripts/font/build_message_font.py` from Kosugi 4.002 (fetched once at a pinned
+google/fonts revision and checked against its SHA-256) and the numbers in
+`scripts/font/message_font.json`; no game data is read, and the build is reproducible byte for byte.
+The numbers come from `scripts/font/fit_message_font.py <game-root>`, which measures Kosugi against the
+pages of the user's own extraction:
+
+- One affine maps Kosugi to the European page, and one more maps that to the English page.
+- Each ASCII glyph may be scaled about its centre (its stems offset back to their weight), moved,
+  slanted or weighted. A change is kept only when it improves both pages and is larger than noise, so
+  the retail font's hinting on one page does not leak into the design. 51 glyphs are corrected:
+  capitals a little wider, figures narrower, the apostrophe slanted, the tilde larger, among others.
+- Accented letters are a corrected base letter and one of Kosugi's marks. Each mark has one shape for
+  both cases and one place per case, so every acute is alike. ì í î ï use a dotless i; the diaeresis
+  is two of Kosugi's full stops; the cedilla is a stroke drawn for this font, since Kosugi has none.
+- ß is a stem and the bowls of Kosugi's 3, ¡ and ¿ the font's own ! and ? turned over, Æ æ Œ œ two
+  letters squeezed together, and the quotes single or paired marks.
+- Full-width symbols are fitted on both pages where both draw them; families (the figures, each pair
+  of arrows or brackets) share their shape.
+
+Against the retail pages the font's mean per-texel coverage error is 0.039 for ASCII on either page,
+0.037 for the European page's other letters and 0.026 for full-width symbols; Kosugi as it comes
+starts at 0.053. What remains is mostly the retail hinting, which an outline font should not copy.
+The tools need `scripts/font/requirements.txt`.
+
+`FontPort.MapsEveryPalFontPage` and `FontPort.PageGeometryIsTheFittedOne` cover the mapping and the
+English page's numbers against `message_font.json`; `FontPort.EveryMappedCharacterIsInTheShippedFont`
+renders every character the painter can ask for. `FontPortGpu.SharpDrawingKeepsRetailLayoutAndLineBreaks`
+checks that layout and line breaks are retail's in both modes and that every outline style draws its
+passes on whole pixels. `MessageFont.Check` runs `scripts/font/test_message_font.py`: the font's grid
+and coverage, and, with Kosugi in `DC2_KOSUGI` or the cache, that the tools rebuild it byte for byte.
 
 For a repeatable visual comparison, use `--jump dungeon:0:1 --fast-load --input tools/input/font-dialogue.input
 --frames 1050 --screenshot caption.png --screenshot-display 1` with a fresh save folder for each setting.
