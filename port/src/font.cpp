@@ -120,22 +120,7 @@ constexpr int   kShiftSteps = 4;     // a glyph is drawn at a quarter-pixel pen;
 // The live FontPortPen's fraction of a logical pixel.
 float pen_fraction = 0.0f;
 
-bool Ready() {
-    static bool tried = false;
-    static bool loaded = false;
-    if (!tried) {
-        tried = true;
-        const auto      file = PathsExecutable().parent_path() / "fonts" / "ChronicleTwoMessage-Regular.ttf";
-        std::error_code error;
-        loaded = std::filesystem::is_regular_file(file, error) && ttffont::Load(file);
-        if (loaded) {
-            CT_LOG_INFO(Gfx, "font: message text from {}", PathsDisplay(file));
-        } else {
-            CT_LOG_INFO(Gfx, "font: {} is missing; keeping the original text", PathsDisplay(file));
-        }
-    }
-    return loaded;
-}
+bool Ready() { return FontPortFace(FontPortTypeface::Message) != nullptr; }
 
 // The loaded font table's codes, two bytes a font number.
 std::span<const std::uint8_t> LoadedTable() {
@@ -181,8 +166,9 @@ const Ink *GetInk(const InkKey &key) {
     const auto [ch, em_x, em_y, shift, layer, px_x, px_y] = key;
     Ink                        ink;
     std::vector<unsigned char> coverage;
-    if (!ttffont::RenderGlyph(ch, em_x / 16.0f, em_y / 16.0f, static_cast<float>(shift) / kShiftSteps, 0.0f, coverage,
-                              ink.width, ink.height, ink.x0, ink.y0) ||
+    if (!FontPortFace(FontPortTypeface::Message)
+             ->RenderGlyph(ch, em_x / 16.0f, em_y / 16.0f, static_cast<float>(shift) / kShiftSteps, 0.0f, coverage,
+                           ink.width, ink.height, ink.x0, ink.y0) ||
         ink.width <= 0 || ink.height <= 0) {
         // Remembered as missing: a character the font cannot draw, or a size it will not.
         cache.emplace(key, ink);
@@ -369,6 +355,33 @@ bool DrawSharpFuchi(mgCDrawPrim &prim, const RECT &dst, const RECT &uv, int styl
 
 } // namespace
 
+const ttffont::Face *FontPortFace(FontPortTypeface typeface) {
+    struct Slot {
+        const char   *file;
+        const char   *text;
+        bool          tried = false;
+        ttffont::Face face;
+    };
+
+    static Slot slots[] = {
+        {.file = "ChronicleTwoMessage-Regular.ttf", .text = "message text"        },
+        {.file = "ChronicleTwoMenu-Regular.ttf",    .text = "menu lettering"      },
+        {.file = "ChronicleTwoBoard-Regular.ttf",   .text = "time board lettering"},
+    };
+    Slot &slot = slots[static_cast<int>(typeface)];
+    if (!slot.tried) {
+        slot.tried = true;
+        const auto      file = PathsExecutable().parent_path() / "fonts" / slot.file;
+        std::error_code error;
+        if (std::filesystem::is_regular_file(file, error) && slot.face.Load(file)) {
+            CT_LOG_INFO(Gfx, "font: {} from {}", slot.text, PathsDisplay(file));
+        } else {
+            CT_LOG_INFO(Gfx, "font: {} is missing; keeping the original {}", PathsDisplay(file), slot.text);
+        }
+    }
+    return slot.face.Loaded() ? &slot.face : nullptr;
+}
+
 bool FontPortProportional() { return ConfigGet().font_sharp && Ready(); }
 
 float FontPortHalfAdvance(int font_no) {
@@ -377,7 +390,7 @@ float FontPortHalfAdvance(int font_no) {
     }
     const char32_t ch = FontPortCharacter(LanguageCode, font_no, LoadedTable());
     float          em = 0.0f;
-    if (ch == 0 || !ttffont::GetAdvance(ch, em)) {
+    if (ch == 0 || !FontPortFace(FontPortTypeface::Message)->GetAdvance(ch, em)) {
         return 1.0f;
     }
     return em * kUnitsPerEm / kHalfWidth;

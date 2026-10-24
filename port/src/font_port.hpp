@@ -3,6 +3,10 @@
 #include <cstdint>
 #include <span>
 
+namespace ttffont {
+class Face;
+}
+
 // The ChronicleTwoMessage character the language's retail font page draws at font_no, or 0 where the font
 // draws nothing for it (Japanese, kana, kanji), which keeps its bitmap. `table` is the loaded font table's
 // list of codes, two bytes a font number. docs/PC.md "Message font".
@@ -17,6 +21,18 @@ struct FontPortPage {
 };
 
 FontPortPage FontPortPageOf(int language);
+
+// The port's typefaces: ChronicleTwoMessage for the game's text, ChronicleTwoMenu for the pause menu's painted
+// words and ChronicleTwoBoard for its time board's.
+enum class FontPortTypeface {
+    Message,
+    Menu,
+    Board,
+};
+
+// The typeface's font, read from fonts/ beside the executable on first use; null where it is missing, which
+// keeps the original text.
+const ttffont::Face *FontPortFace(FontPortTypeface typeface);
 
 // Whether text takes ChronicleTwoMessage's own letter widths: while the font is drawn sharp and has loaded. The
 // original font keeps retail's layout, every half-width character in the same cell.

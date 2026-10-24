@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "mainloop.hpp"
+#include "menu_label.hpp"
 #include "menu_mouse.hpp"
 #include "menudraw.hpp"
 #include "mg_drawprim.hpp"
@@ -117,6 +118,9 @@ PORT_OVERRIDE void PrimQuad(mgCTexture *texture, float x, float y, mgRect<int> u
 // Host specializations of the rectangle helper declared by menudraw.hpp.
 template <>
 void PrimQuad<float>(mgCDrawPrim *prim, mgRect<float> put_rect, mgRect<int> tex_rect) {
+    if (prim && MenuLabelDraw(*prim, put_rect, tex_rect)) {
+        return;
+    }
     static char character_name[] = "chr_bg";
     static char invent_name[] = "inv_bg";
     static char options_name[] = "op_bg";
@@ -134,6 +138,9 @@ void PrimQuad<float>(mgCDrawPrim *prim, mgRect<float> put_rect, mgRect<int> tex_
 
 template <>
 void PrimQuad<int>(mgCDrawPrim *prim, mgRect<int> put_rect, mgRect<int> tex_rect) {
+    if (prim && MenuLabelDrawFigure(*prim, put_rect, tex_rect)) {
+        return;
+    }
     static char frame_name[] = "bg16";
     if (IsBackdrop(prim, tex_rect, frame_name, 704, 416)) {
         // Preserve the authored lens position. Full-frame sprite cover scaling

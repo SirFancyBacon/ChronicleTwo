@@ -18,7 +18,9 @@
 #include "font_outline.hpp"
 #include "font_port.hpp"
 #include "gfx_fixture.hpp"
+#include "lettering.hpp"
 #include "mainloop.hpp"
+#include "menu_label.hpp"
 #include "mg_drawprim_port.hpp"
 #include "mglib.hpp"
 #include "mglib_port.hpp"
@@ -206,6 +208,75 @@ TEST(FontPort, EveryMappedCharacterIsInTheShippedFont) {
     EXPECT_EQ(mapped, 119);
 }
 
+// Every typeface loads from fonts/ beside the executable, and each draws its own letters.
+TEST(FontPort, EveryTypefaceLoads) {
+    const ttffont::Face *message = FontPortFace(FontPortTypeface::Message);
+    const ttffont::Face *menu = FontPortFace(FontPortTypeface::Menu);
+    ASSERT_NE(message, nullptr);
+    ASSERT_NE(menu, nullptr);
+    ASSERT_NE(FontPortFace(FontPortTypeface::Board), nullptr);
+    float message_m = 0, menu_m = 0, menu_i = 0;
+    ASSERT_TRUE(message->GetAdvance('m', message_m));
+    ASSERT_TRUE(menu->GetAdvance('m', menu_m));
+    ASSERT_TRUE(menu->GetAdvance('i', menu_i));
+    EXPECT_LT(menu_i, menu_m);
+    EXPECT_NE(menu_m, message_m);
+    std::vector<unsigned char> alpha;
+    int                        w, h, x0, y0;
+    EXPECT_TRUE(menu->RenderGlyph('H', 40.0f, 40.0f, 0.0f, 0.0f, alpha, w, h, x0, y0));
+    // The menu font has no Japanese; the painting keeps those labels.
+    EXPECT_FALSE(menu->RenderGlyph(char32_t{0x30A2}, 40.0f, 40.0f, 0.0f, 0.0f, alpha, w, h, x0, y0));
+}
+
+// The label painter places words where the fit put them: each lettering's em (its font's units over 64), pen and
+// baseline, and each word's own offset.
+TEST(MenuLabel, GeometryIsTheFittedOne) {
+    for (const auto &[lettering, path] : {
+             std::pair{MenuLettering::Words, CT_MENU_FONT_PARAMETERS },
+             std::pair{MenuLettering::Board, CT_BOARD_FONT_PARAMETERS}
+    }) {
+        std::ifstream file(path);
+        ASSERT_TRUE(file) << path;
+        const auto parameters = nlohmann::json::parse(file);
+        const auto fitted = parameters["global"];
+        const auto geometry = MenuLabelGeometryOf(lettering);
+        EXPECT_FLOAT_EQ(geometry.em, std::round(fitted["em"].get<float>() * 64.0f) / 64.0f) << path;
+        EXPECT_FLOAT_EQ(geometry.start, fitted["start"].get<float>()) << path;
+        EXPECT_FLOAT_EQ(geometry.baseline, fitted["baseline"].get<float>()) << path;
+        ASSERT_EQ(MenuLabelWords(lettering).size(), parameters["words"].size()) << path;
+        for (const MenuLabelWord &word : MenuLabelWords(lettering)) {
+            const auto offset = parameters["words"][std::string(word.text)];
+            EXPECT_FLOAT_EQ(word.dx, offset[0].get<float>()) << word.text;
+            EXPECT_FLOAT_EQ(word.dy, offset[1].get<float>()) << word.text;
+        }
+    }
+}
+
+// A label is lettered only where the menu atlas paints one, and only with the sharp text font.
+TEST(MenuLabel, OnlyTheAtlasWordsAreLettered) {
+    ConfigRoot  config;
+    FontState   state;
+    mgCDrawPrim prim;
+    MySetPrim(&prim, 1, 0);
+    const mgRect<float> put(10.0f, 20.0f, 112.0f, 24.0f);
+    const mgRect<int>   cell(32, 160, 112, 24);
+    config.Select("sharp");
+    EXPECT_FALSE(MenuLabelDraw(prim, put, cell)); // no texture bound
+    config.Select("original");
+    EXPECT_FALSE(MenuLabelDraw(prim, put, cell));
+}
+
+// Lettering reads its text as UTF-8, a malformed byte at a time as the replacement character.
+TEST(Lettering, ReadsUtf8) {
+    const std::string_view text = "a\xc3\xa7\xe2\x80\x94\xf0\x9f\x98\x80\xc3(\xc0\xaf";
+    std::vector<char32_t>  read;
+    for (std::size_t at = 0; at < text.size();) {
+        read.push_back(LetteringNextCharacter(text, at));
+    }
+    const std::vector<char32_t> expected = {'a', 0xE7, 0x2014, 0x1F600, 0xFFFD, '(', 0xFFFD, 0xFFFD};
+    EXPECT_EQ(read, expected);
+}
+
 // The rims' profiles: a soft half-pixel edge at their measured radius, and the glow fading out.
 TEST(FontOutline, RimsFadeOutAtTheirMeasuredReach) {
     EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Thin, 0.0f), 1.0f);
@@ -240,6 +311,28 @@ TEST(FontOutline, RimIsRoundInLogicalPixels) {
     EXPECT_EQ(at(middle, size - 1 + 3), 0);   // a logical pixel and a half down
     // Corners are round: the diagonal pixel as far out as the side one is fainter.
     EXPECT_LT(at(size - 1 + 4, size - 1 + 2), at(size - 1 + 4, middle));
+}
+
+// A rim of any radius is the thin and thick rims' profile at that radius, and the distance field is the one they
+// are drawn from: zero on the glyph, growing in logical pixels away from it.
+TEST(FontOutline, RimOfAnyRadiusAndItsDistances) {
+    constexpr int                   size = 4;
+    const std::vector<std::uint8_t> square(size * size, 255);
+    const auto                      thin = FontOutlineRim(square, size, size, 4.0f, 2.0f, FontOutline::Thin);
+    const auto                      same = FontOutlineRimOf(square, size, size, 4.0f, 2.0f, 0.85f);
+    EXPECT_EQ(same.alpha, thin.alpha);
+    EXPECT_EQ(same.margin_x, thin.margin_x);
+    const auto wider = FontOutlineRimOf(square, size, size, 4.0f, 2.0f, 1.3f);
+    EXPECT_GT(wider.margin_x, thin.margin_x);
+
+    const int  w = size + 8, h = size + 4;
+    const auto distance = FontOutlineDistance(square, size, size, 4.0f, 2.0f, 4, 2, w, h);
+    ASSERT_EQ(distance.size(), static_cast<std::size_t>(w * h));
+    auto at = [&](int x, int y) { return distance[static_cast<std::size_t>(y) * w + x]; };
+    EXPECT_EQ(at(4 + 1, 2 + 1), 0.0f);
+    EXPECT_NEAR(at(4 + size - 1 + 4, 2 + 1), 1.0f - 0.5f / std::sqrt(8.0f), 1e-4f); // four pixels right: a logical one
+    EXPECT_GT(at(w - 1, h - 1), at(4 + size, 2 + size));
+    EXPECT_TRUE(FontOutlineDistance(square, size, size, 4.0f, 2.0f, 4, 2, size, size).empty());
 }
 
 // Sharp, each letter takes its own width in the font; the original font keeps retail's one cell for every

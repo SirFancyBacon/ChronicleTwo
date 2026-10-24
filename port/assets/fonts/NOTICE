@@ -13,3 +13,47 @@ scripts/font/message_font.json:
   glyphs; the cedilla is a stroke drawn for this font.
 - The font holds only the characters the game's European and English text draws.
 - It is renamed ChronicleTwoMessage.
+
+ChronicleTwoMenu
+Copyright 2020 The Libre Franklin Project Authors (https://github.com/googlefonts/Libre-Franklin)
+Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type)
+
+ChronicleTwoMenu-Regular.ttf is a modified version of Libre Franklin 3.000, with its M from Jost 3.710, both licensed
+under the SIL Open Font License, Version 1.1 (OFL-LibreFranklin.txt and OFL-Jost.txt in this directory).
+
+Changes made for ChronicleTwo, by scripts/font/build_menu_font.py from the parameters in
+scripts/font/menu_font.json:
+
+- The weight 500 instances of both variable fonts, scaled onto the texel grid of Dark Chronicle's pause menu
+  (64 units a texel) and stretched 1.265 times wide.
+- Every letter's outer corners are rounded, and many letters are rescaled, slanted, moved or reweighted, their
+  stems kept at their weight, and their advances changed.
+- The question mark is drawn for this font: a hood ending in a drop, a stem and a round dot.
+- The font holds only ASCII.
+- It is renamed ChronicleTwoMenu.
+
+ChronicleTwoBoard
+Copyright 2010 The Yanone Kaffeesatz Project Authors (https://github.com/yanone/kaffeesatz)
+Copyright 2011 The Roboto Project Authors (https://github.com/googlefonts/roboto-classic)
+Copyright 2012 The Fjalla One Project Authors (https://github.com/SorkinType/FjallaOne)
+Copyright 2013 The Antonio Project Authors (https://github.com/googlefonts/antonioFont)
+Copyright 2016 The Sawarabi Gothic Project Authors
+Copyright 2016 The M+ Project Authors
+
+ChronicleTwoBoard-Regular.ttf is a modified version of Yanone Kaffeesatz 2.003, with its figures, colon and y
+from Roboto Condensed 3.008, its 1 from Sawarabi Gothic 20141215, its 4 from Fjalla One 1.002, its 5 from
+Antonio 1.002 and its 6 from M+ 1p 1.062, all licensed under the SIL Open Font License, Version 1.1
+(OFL-YanoneKaffeesatz.txt, OFL-RobotoCondensed.txt, OFL-SawarabiGothic.txt, OFL-FjallaOne.txt, OFL-Antonio.txt and
+OFL-MPLUS1p.txt in this directory).
+
+Changes made for ChronicleTwo, by scripts/font/build_menu_font.py from the parameters in
+scripts/font/board_font.json:
+
+- Weight 400 instances of the variable fonts, scaled onto the texel grid of Dark Chronicle's pause menu
+  (64 units a texel), each source at its own size and width.
+- Many letters and figures are rescaled, slanted, moved or reweighted, their stems kept at their weight, and
+  their advances changed; the a's bowl is taller and its top shorter, the P's bowl reaches lower down its
+  stem, the y's tail is cut short, the 1's flag is shorter, the 5's top bar and the top of its bowl thicker, and
+  the 6's stroke leans straight into its bowl.
+- The font holds only ASCII.
+- It is renamed ChronicleTwoBoard.

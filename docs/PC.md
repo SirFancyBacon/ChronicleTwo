@@ -1770,7 +1770,9 @@ Against the retail pages the font's mean per-texel coverage error is 0.039 for A
 starts at 0.053. What remains is mostly the retail hinting, which an outline font should not copy.
 The tools need `scripts/font/requirements.txt`.
 
-`FontOutline.RimsFadeOutAtTheirMeasuredReach` and `FontOutline.RimIsRoundInLogicalPixels` cover the rims.
+`FontOutline.RimsFadeOutAtTheirMeasuredReach`, `FontOutline.RimIsRoundInLogicalPixels` and
+`FontOutline.RimOfAnyRadiusAndItsDistances` cover the rims and the distance field the menu lettering's shadow
+fades over.
 `FontPort.MapsEveryPalFontPage` and `FontPort.PageGeometryIsTheFittedOne` cover the mapping and the
 English page's numbers against `message_font.json`; `FontPort.EveryMappedCharacterIsInTheShippedFont`
 renders every character the painter can ask for. `FontPort.SharpLettersTakeTheirOwnWidths` covers the
@@ -1786,6 +1788,79 @@ For a repeatable visual comparison, use `--jump dungeon:0:1 --fast-load --input 
 --frames 1050 --screenshot caption.png --screenshot-display 1` with a fresh save folder for each setting.
 The floor menu is visible at frame 400 of the same script. Add `--window 1920x1080` or `--window 3840x2160`
 to compare presentation captures (`caption-display-0.png`) at those resolutions.
+
+#### Menu lettering
+
+The pause menu's words (Item, Character, Make, Move, Options, Help, ???) are painted into its atlas
+(`mnmain`), each in a 112x24-texel cell. With `video.text_font` sharp and English text, `MenuLabelDraw`
+(`port/src/menu_label.cpp`) draws them in ChronicleTwoMenu instead: the port's `PrimQuad<float>`
+(`port/src/menudraw_primquad.cpp`) asks it about every rectangle it draws, and a rectangle of the atlas that is
+one of the named cells (`mi_item_ic`, `mi_chr_ic`, `mi_invent_ic`, `mi_move_ic`, `mi_op_ic`, `mi_mn_ic`,
+`mi_hatena_ic`, looked up by name in the menu's layout) becomes its word. The font's em is its units over 64
+texels; each word's pen starts `start` texels into its cell on a baseline `baseline` rows down, moved by the
+word's own offset, all as `scripts/font/menu_font.json` has them. The word is lettered as the atlas paints it:
+lit grey (217) on a dark violet rim (29, 24, 34) a texel and a third wide (`FontOutlineRimOf`), with the rimmed
+letters again a texel and a half right and down as their shadow, its opacity falling to 75% as it leaves them
+(`FontOutlineDistance`); all set by eye in the game over the painting's rim of about a texel and a half and its
+shadow of a texel and a quarter across. It is composed into one image at the target's resolution and drawn as one quad, so the
+menu's colour, fades and its own shadow pass tint it as they tinted the cell. The other languages paint their
+words in faces of their own and keep their paintings for now, as does the original text font.
+
+The time board's lettering (menu0.cfg's `timeboard`: Day, Future, AM, PM, the colon and the figures of the day
+count and the clock) is drawn the same way in ChronicleTwoBoard, in the board's own style: lit grey (205) with no
+rim and a hard dark shadow (10) a texel right and down. Its words are named cells (`日目`, `未来`, `AM`, `PM`,
+`::`); its figures are cut one by one from the `時間数` strip by `DrawMenuNumber`, so the port's `PrimQuad<int>`
+hands each to `MenuLabelDrawFigure`, which recognises the strip's cell and draws that figure.
+
+ChronicleTwoMenu (`port/assets/fonts/ChronicleTwoMenu-Regular.ttf`, with both source fonts' SIL Open Font
+Licenses and a notice of the changes) is built by `scripts/font/build_menu_font.py` from Libre Franklin 3.000
+and Jost 3.710 (each fetched once at a pinned google/fonts revision and checked against its SHA-256) and the
+numbers in `scripts/font/menu_font.json`; no game data is read, and the build is reproducible byte for byte.
+Its units are the atlas's texels at 64 each. The numbers come from `scripts/font/fit_menu_font.py <game-root>`,
+which sets each word in its cell as the font would draw it and compares it texel by texel with how lit the
+user's own English atlas is between its rim and its fill:
+
+- Of 80 open fonts measured letter by letter, Libre Franklin at weight 500 came nearest. One affine takes it to
+  the atlas: 18.06 texels an em, 1.265 times as wide.
+- Each painted letter may be scaled across about its middle and up from the baseline (within 4%), slanted,
+  moved across, reweighted with its stems kept at their weight, and given its own advance. Letters keep the
+  shared baseline: the painting's per-letter steps up and down are its rasterization, which the font should not
+  copy. A correction that takes less than 2% of its words' error away is dropped.
+- Each word gets an offset of its own (under half a texel), since each was painted on its own; the label painter
+  places it there.
+- The M is Jost's, whose legs splay as the painting's do; of 26 fonts fitted for it, Jost at weight 500 came
+  nearest, a ninth closer than Libre Franklin's.
+- Every letter's outer corners are rounded (`rounding`, in each source's units: 40 for Libre Franklin, 70 for
+  Jost, whose M's points it blunts): the corner's sides are cut back and joined by a curve through it, so inner
+  corners stay sharp and no stroke loses weight.
+- The question mark is drawn: a hood, an elliptical arc whose left end hangs into a round drop, a stem sweeping
+  down from its right end, and a round dot, each dimension fitted to the painted ones (`QUESTION_KEYS`), then
+  given a little more arch at the same height.
+- Design over the fit (`warp`: the points inside a region scaled and sheared about a point): the r's hook comes
+  down 0.4 texel and reaches half a texel further, the t's tail reaches most of a texel further and turns up at
+  its end, and the M stands taller.
+- Flared stroke ends (`flare`, off) fit the painting no better than plain ones.
+
+The mean per-texel error against the painted words is 0.018, from 0.099 for Libre Franklin as it comes, before
+the design changes.
+
+ChronicleTwoBoard (`scripts/font/board_font.json`, same tools) is fitted the same way to the board's painted
+words and to each figure in its own cell. Its words are Yanone Kaffeesatz at weight 400, the nearest of 36
+condensed fonts measured; its figures, colon and y are Roboto Condensed's, but its 1 is Sawarabi Gothic's, its 4
+Fjalla One's, its 5 Antonio's and its 6 M+ 1p's, each the nearest fitted for it (the painted figures are a
+Japanese gothic's), drawn at its own size and width (`sources`), the 4 and 5 brought to the others' weight and
+height, and all slanted a little (a shear of 0.06, about 3.5°), the 1 and the 9 more, as the clock's are
+(`--keep shear`). Warps give the a a taller bowl
+and a shorter top, the P a bowl reaching lower down its stem, the 1 a shorter flag, the 5 a thicker top bar and a bowl
+thicker where it leaves the stem, and the 6 a straight, leaning stroke running into its bowl; a `clip` (a box the glyph is cut to) ends the y's tail short. The mean per-texel error is about 0.05, from 0.139 unfitted; the board's thin strokes leave
+more of each glyph at its edge than the words' do. `fit_menu_font.py --only` refits just the letters named.
+
+`FontPort.EveryTypefaceLoads`, `MenuLabel.GeometryIsTheFittedOne` and `MenuLabel.OnlyTheAtlasWordsAreLettered`
+cover the loading, the placement against both fonts' parameters and the cells lettered; `MenuFont.Check` runs
+`scripts/font/test_menu_font.py`: the fonts' characters, units, baselines, the M, the drawn question mark and the
+figures' heights, and, with the source fonts in `DC2_FONT_SOURCES` or the cache, that the tools rebuild both byte
+for byte. The pause menu is open
+at frame 365 of `--jump town:10 --fast-load --input tools/input/jump-town-menu-pcsettings.input`.
 
 `mgInitFont` returns 0 and `mgCloseFont` does nothing. The port keeps no console, because retail never draws it: `font_draw_flag` is never set.
 

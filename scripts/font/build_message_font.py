@@ -110,7 +110,10 @@ def signed_area(recording):
     """Twice the signed area of a recorded outline's on-curve polygon; positive runs counter-clockwise."""
     total, first, last = 0.0, None, None
     for op, args in recording.value:
-        if op == "moveTo":
+        if op == "qCurveTo" and args[-1] is None:
+            # A closed contour of off-curve points only: its control polygon turns the same way.
+            total += sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(args[:-1], args[1:-1] + args[:1]))
+        elif op == "moveTo":
             first = last = args[0]
         elif op in ("lineTo", "qCurveTo", "curveTo"):
             total += last[0] * args[-1][1] - args[-1][0] * last[1]

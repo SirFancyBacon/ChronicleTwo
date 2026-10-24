@@ -34,3 +34,13 @@ struct FontOutlineImage {
 
 FontOutlineImage FontOutlineRim(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y,
                                 FontOutline outline);
+
+// A rim `radius` logical pixels out with the same half-pixel soft edge, for lettering whose painting has a rim of its
+// own width.
+FontOutlineImage FontOutlineRimOf(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y,
+                                  float radius);
+
+// Each pixel's distance in logical pixels from the glyph's edge (0 inside it) across an image_width x image_height
+// image whose glyph coverage (width x height) sits margin_x, margin_y in from its corner; empty for a bad size.
+std::vector<float> FontOutlineDistance(std::span<const std::uint8_t> coverage, int width, int height, float px_x,
+                                       float px_y, int margin_x, int margin_y, int image_width, int image_height);

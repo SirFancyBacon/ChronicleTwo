@@ -54,6 +54,73 @@ void Distance1D(std::span<const double> f, double spacing, std::vector<double> &
     }
 }
 
+// Each pixel of a w x h image's distance in logical pixels from the glyph's edge, the glyph's coverage (width x
+// height) sitting margin_x, margin_y in from its corner; 0 inside the glyph.
+std::vector<float> Distances(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y,
+                             int margin_x, int margin_y, int w, int h) {
+    // The glyph is the pixels at least half covered; distances run in logical pixels.
+    std::vector<double> field(static_cast<std::size_t>(w) * h, kOutside);
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            if (coverage[static_cast<std::size_t>(row) * width + col] >= 128) {
+                field[static_cast<std::size_t>(row + margin_y) * w + col + margin_x] = 0.0;
+            }
+        }
+    }
+    std::vector<double> line, out, z;
+    std::vector<int>    v;
+    for (int row = 0; row < h; ++row) {
+        line.assign(field.begin() + static_cast<std::ptrdiff_t>(row) * w, field.begin() + static_cast<std::ptrdiff_t>(row + 1) * w);
+        Distance1D(line, 1.0 / px_x, out, v, z);
+        std::copy(out.begin(), out.end(), field.begin() + static_cast<std::ptrdiff_t>(row) * w);
+    }
+    line.resize(h);
+    for (int col = 0; col < w; ++col) {
+        for (int row = 0; row < h; ++row) {
+            line[row] = field[static_cast<std::size_t>(row) * w + col];
+        }
+        Distance1D(line, 1.0 / px_y, out, v, z);
+        for (int row = 0; row < h; ++row) {
+            field[static_cast<std::size_t>(row) * w + col] = out[row];
+        }
+    }
+    // A pixel centre half a pixel inside the glyph's edge is what the transform calls zero.
+    const float        half_pixel = 0.5f / std::sqrt(px_x * px_y);
+    std::vector<float> distance(field.size());
+    for (std::size_t at = 0; at < field.size(); ++at) {
+        distance[at] = std::max(0.0f, static_cast<float>(std::sqrt(field[at])) - half_pixel);
+    }
+    return distance;
+}
+
+template <typename Opacity>
+FontOutlineImage Rim(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y, float reach,
+                     Opacity opacity) {
+    FontOutlineImage image;
+    if (width <= 0 || height <= 0 || !(px_x > 0.0f) || !(px_y > 0.0f) ||
+        coverage.size() < static_cast<std::size_t>(width) * height) {
+        return image;
+    }
+    image.margin_x = static_cast<int>(std::ceil(reach * px_x)) + 1;
+    image.margin_y = static_cast<int>(std::ceil(reach * px_y)) + 1;
+    const int                w = width + 2 * image.margin_x;
+    const int                h = height + 2 * image.margin_y;
+    const std::vector<float> distance = Distances(coverage, width, height, px_x, px_y, image.margin_x, image.margin_y, w, h);
+    image.alpha.assign(static_cast<std::size_t>(w) * h, 0);
+    for (int row = 0; row < h; ++row) {
+        for (int col = 0; col < w; ++col) {
+            const std::size_t at = static_cast<std::size_t>(row) * w + col;
+            float             a = opacity(distance[at]);
+            const int         gx = col - image.margin_x, gy = row - image.margin_y;
+            if (gx >= 0 && gx < width && gy >= 0 && gy < height) {
+                a = std::max(a, coverage[static_cast<std::size_t>(gy) * width + gx] / 255.0f);
+            }
+            image.alpha[at] = static_cast<std::uint8_t>(std::lround(a * 255.0f));
+        }
+    }
+    return image;
+}
+
 } // namespace
 
 float FontOutlineOpacity(FontOutline outline, float d) {
@@ -84,56 +151,22 @@ float FontOutlineAlpha(FontOutline outline) { return outline == FontOutline::Glo
 
 FontOutlineImage FontOutlineRim(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y,
                                 FontOutline outline) {
-    FontOutlineImage image;
+    return Rim(coverage, width, height, px_x, px_y, FontOutlineReach(outline),
+               [outline](float d) { return FontOutlineOpacity(outline, d); });
+}
+
+FontOutlineImage FontOutlineRimOf(std::span<const std::uint8_t> coverage, int width, int height, float px_x, float px_y,
+                                  float radius) {
+    return Rim(coverage, width, height, px_x, px_y, radius + kFeather / 2,
+               [radius](float d) { return std::clamp((radius + kFeather / 2 - d) / kFeather, 0.0f, 1.0f); });
+}
+
+std::vector<float> FontOutlineDistance(std::span<const std::uint8_t> coverage, int width, int height, float px_x,
+                                       float px_y, int margin_x, int margin_y, int image_width, int image_height) {
     if (width <= 0 || height <= 0 || !(px_x > 0.0f) || !(px_y > 0.0f) ||
-        coverage.size() < static_cast<std::size_t>(width) * height) {
-        return image;
+        coverage.size() < static_cast<std::size_t>(width) * height || margin_x < 0 || margin_y < 0 ||
+        image_width < width + margin_x || image_height < height + margin_y) {
+        return {};
     }
-    const float reach = FontOutlineReach(outline);
-    image.margin_x = static_cast<int>(std::ceil(reach * px_x)) + 1;
-    image.margin_y = static_cast<int>(std::ceil(reach * px_y)) + 1;
-    const int w = width + 2 * image.margin_x;
-    const int h = height + 2 * image.margin_y;
-    // The glyph is the pixels at least half covered; distances run in logical pixels.
-    std::vector<double> field(static_cast<std::size_t>(w) * h, kOutside);
-    for (int row = 0; row < height; ++row) {
-        for (int col = 0; col < width; ++col) {
-            if (coverage[static_cast<std::size_t>(row) * width + col] >= 128) {
-                field[static_cast<std::size_t>(row + image.margin_y) * w + col + image.margin_x] = 0.0;
-            }
-        }
-    }
-    std::vector<double> line, out, z;
-    std::vector<int>    v;
-    for (int row = 0; row < h; ++row) {
-        line.assign(field.begin() + static_cast<std::ptrdiff_t>(row) * w, field.begin() + static_cast<std::ptrdiff_t>(row + 1) * w);
-        Distance1D(line, 1.0 / px_x, out, v, z);
-        std::copy(out.begin(), out.end(), field.begin() + static_cast<std::ptrdiff_t>(row) * w);
-    }
-    line.resize(h);
-    for (int col = 0; col < w; ++col) {
-        for (int row = 0; row < h; ++row) {
-            line[row] = field[static_cast<std::size_t>(row) * w + col];
-        }
-        Distance1D(line, 1.0 / px_y, out, v, z);
-        for (int row = 0; row < h; ++row) {
-            field[static_cast<std::size_t>(row) * w + col] = out[row];
-        }
-    }
-    // A pixel centre half a pixel inside the glyph's edge is what the transform calls zero.
-    const float half_pixel = 0.5f / std::sqrt(px_x * px_y);
-    image.alpha.assign(static_cast<std::size_t>(w) * h, 0);
-    for (int row = 0; row < h; ++row) {
-        for (int col = 0; col < w; ++col) {
-            const std::size_t at = static_cast<std::size_t>(row) * w + col;
-            const float       d = std::max(0.0f, static_cast<float>(std::sqrt(field[at])) - half_pixel);
-            float             a = FontOutlineOpacity(outline, d);
-            const int         gx = col - image.margin_x, gy = row - image.margin_y;
-            if (gx >= 0 && gx < width && gy >= 0 && gy < height) {
-                a = std::max(a, coverage[static_cast<std::size_t>(gy) * width + gx] / 255.0f);
-            }
-            image.alpha[at] = static_cast<std::uint8_t>(std::lround(a * 255.0f));
-        }
-    }
-    return image;
+    return Distances(coverage, width, height, px_x, px_y, margin_x, margin_y, image_width, image_height);
 }
