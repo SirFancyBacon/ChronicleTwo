@@ -6,9 +6,11 @@
 #include <filesystem>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <vector>
 
+#include "font_outline.hpp"
 #include "font_port.hpp"
 #include "log/log.hpp"
 #include "mainloop.hpp"
@@ -17,6 +19,9 @@
 #include "platform/config.hpp"
 #include "platform/paths.hpp"
 #include "platform/ttffont.hpp"
+
+// Retail's outline and shadow draw, kept by the unit copy's retail bridge (scripts/port/unit_copy.py).
+void PortRetailSet2DSpriteFuchi(mgCDrawPrim *prim, RECT destination, RECT texture, int style, int alpha) asm("Font_Set2DSpriteFuchi");
 
 namespace {
 
@@ -126,6 +131,14 @@ bool Ready() {
     return loaded;
 }
 
+// A glyph's fill, or one of the rims drawn for retail's outline styles.
+enum class Layer {
+    Fill,
+    Thin,
+    Thick,
+    Glow,
+};
+
 struct Ink {
     gfx::TextureHandle texture = gfx::kNullTexture;
     int                width = 0, height = 0, x0 = 0, y0 = 0;
@@ -133,29 +146,43 @@ struct Ink {
     int                used = 0; // the frame that last drew it
 };
 
-using InkKey = std::tuple<char32_t, int, int, int>; // character, em across and down in 1/16 px, pen shift
+// Character, em across and down in 1/16 px, pen shift, layer, and a rim's target pixels to a logical
+// pixel across and down in 1/16.
+using InkKey = std::tuple<char32_t, int, int, int, Layer, int, int>;
+
+FontOutline OutlineOf(Layer layer) {
+    return layer == Layer::Thick ? FontOutline::Thick : layer == Layer::Glow ? FontOutline::Glow
+                                                                             : FontOutline::Thin;
+}
 
 // Glyph images are immutable, so a recorded frame never samples one that changed. Past the budget the
 // longest unused are destroyed; a frame's list keeps any it still draws alive until it is done with it.
-const Ink *GetInk(char32_t ch, float em_x, float em_y, int shift) {
+const Ink *GetInk(const InkKey &key) {
     static std::map<InkKey, Ink> cache;
     static std::size_t           bytes_used = 0;
     constexpr std::size_t budget = 32 * 1024 * 1024;
-    const InkKey          key{ch, static_cast<int>(std::lround(em_x * 16)), static_cast<int>(std::lround(em_y * 16)), shift};
     const int             frame = mgPortFrameCount();
     if (const auto found = cache.find(key); found != cache.end()) {
         found->second.used = frame;
         return found->second.texture == gfx::kNullTexture ? nullptr : &found->second;
     }
+    const auto [ch, em_x, em_y, shift, layer, px_x, px_y] = key;
     Ink                        ink;
     std::vector<unsigned char> coverage;
-    if (!ttffont::RenderGlyph(ch, std::get<1>(key) / 16.0f, std::get<2>(key) / 16.0f,
-                              static_cast<float>(shift) / kShiftSteps, 0.0f, coverage, ink.width, ink.height, ink.x0,
-                              ink.y0) ||
+    if (!ttffont::RenderGlyph(ch, em_x / 16.0f, em_y / 16.0f, static_cast<float>(shift) / kShiftSteps, 0.0f, coverage,
+                              ink.width, ink.height, ink.x0, ink.y0) ||
         ink.width <= 0 || ink.height <= 0) {
         // Remembered as missing: a character the font cannot draw, or a size it will not.
         cache.emplace(key, ink);
         return nullptr;
+    }
+    if (layer != Layer::Fill) {
+        FontOutlineImage rim = FontOutlineRim(coverage, ink.width, ink.height, px_x / 16.0f, px_y / 16.0f, OutlineOf(layer));
+        coverage = std::move(rim.alpha);
+        ink.width += 2 * rim.margin_x;
+        ink.height += 2 * rim.margin_y;
+        ink.x0 -= rim.margin_x;
+        ink.y0 -= rim.margin_y;
     }
     ink.bytes = static_cast<std::size_t>(ink.width + 2) * (ink.height + 2) * 4;
     while (bytes_used + ink.bytes > budget) {
@@ -196,66 +223,90 @@ const Ink *GetInk(char32_t ch, float em_x, float em_y, int shift) {
     return &cache.insert_or_assign(key, ink).first->second;
 }
 
-// Draws the font cell `uv` of the retail font page as ChronicleTwoMessage into `dst`, both given as
-// position and size; false leaves the cell to the bitmap.
-bool DrawSharp(mgCDrawPrim &prim, const mgRect<int> &dst, const mgRect<int> &uv, const RGBAQ_TYPE &color) {
-    if (!ConfigGet().font_sharp || uv.right <= 0 || uv.bottom <= 0 || dst.right <= 0 || dst.bottom <= 0 ||
-        uv.left % FONT_TEX_CHAR_W != 0 || uv.top % FONT_TEX_CHAR_H != 0 || uv.bottom != FONT_TEX_CHAR_H) {
-        return false;
+// Where a font cell's glyph lands: its character, its em and pen in target pixels, and the mapping
+// back to vertex units.
+struct Placement {
+    char32_t            ch = 0;
+    float               em_x = 0, em_y = 0;
+    float               pen_px = 0, base_px = 0;
+    float               px_x = 0, px_y = 0; // target pixels to a logical pixel
+    gfx::LogicalMapping mapping{};
+    gfx::Vertex2D       origin{};
+};
+
+// The font cell `uv` of the retail font page drawn into `dst` (both position and size) moved by
+// (dx, dy) logical pixels, or nothing for a cell the bitmap keeps. A space places nothing either.
+std::optional<Placement> Place(const mgCDrawPrim &prim, int x, int y, int w, int h, int u, int v, int u_w, int v_h,
+                               float dx, float dy) {
+    if (!ConfigGet().font_sharp || u_w <= 0 || v_h <= 0 || w <= 0 || h <= 0 || u % FONT_TEX_CHAR_W != 0 ||
+        v % FONT_TEX_CHAR_H != 0 || v_h != FONT_TEX_CHAR_H) {
+        return std::nullopt;
     }
-    const int      font_no = uv.top / FONT_TEX_CHAR_H * FONT_TEX_COLUMNS + uv.left / FONT_TEX_CHAR_W;
-    const int      count = std::clamp(GetYoyakuTblNum(), 0, static_cast<int>(sizeof(FONT_TBL_BIN::yoyaku_tbl) / 2));
-    const char32_t ch = FontPortCharacter(LanguageCode, font_no, {GetYoyakuTblTop(), static_cast<std::size_t>(count) * 2});
-    if (ch == 0 || !Ready()) {
-        return false;
-    }
-    if (ch == 0x20 || ch == 0x3000) {
-        return true;
+    Placement out;
+    const int font_no = v / FONT_TEX_CHAR_H * FONT_TEX_COLUMNS + u / FONT_TEX_CHAR_W;
+    const int count = std::clamp(GetYoyakuTblNum(), 0, static_cast<int>(sizeof(FONT_TBL_BIN::yoyaku_tbl) / 2));
+    out.ch = FontPortCharacter(LanguageCode, font_no, {GetYoyakuTblTop(), static_cast<std::size_t>(count) * 2});
+    if (out.ch == 0 || !Ready()) {
+        return std::nullopt;
     }
     const FontPortPage page = FontPortPageOf(LanguageCode);
-    const auto         mapping = gfx::GetUiMapping(mgPortCurrentTarget());
+    out.mapping = gfx::GetUiMapping(mgPortCurrentTarget());
     // Logical pixels a texel: retail stretches the cell's texels over dst.
-    const float        texel_x = static_cast<float>(dst.right) / static_cast<float>(uv.right);
-    const float        texel_y = static_cast<float>(dst.bottom) / static_cast<float>(uv.bottom);
-    const float        pen_x = static_cast<float>(dst.left) + page.pen_x * texel_x;
-    const float        base_y = static_cast<float>(dst.top) + page.baseline * texel_y;
-    const std::uint8_t tint[] = {static_cast<std::uint8_t>(color.r), static_cast<std::uint8_t>(color.g),
-                                 static_cast<std::uint8_t>(color.b), static_cast<std::uint8_t>(color.a)};
+    const float        texel_x = static_cast<float>(w) / static_cast<float>(u_w);
+    const float        texel_y = static_cast<float>(h) / static_cast<float>(v_h);
+    const float        pen_x = static_cast<float>(x) + dx + page.pen_x * texel_x;
+    const float        base_y = static_cast<float>(y) + dy + page.baseline * texel_y;
+    const std::uint8_t none[4] = {};
     // Vertex units a logical pixel, and the pen in target pixels.
-    const gfx::Vertex2D origin = mgPortPrimVertex(prim, pen_x, base_y, 0, 0, 0, tint);
-    const gfx::Vertex2D step = mgPortPrimVertex(prim, pen_x + 1, base_y + 1, 0, 0, 0, tint);
-    const float         to_px_x = (step.x - origin.x) * mapping.scale_x;
-    const float         to_px_y = (step.y - origin.y) * mapping.scale_y;
-    const float         em_x = kUnitsPerEm * page.texels_per_unit_x * texel_x * to_px_x;
-    const float         em_y = kUnitsPerEm * page.texels_per_unit_y * texel_y * to_px_y;
-    const float         pen_px = origin.x * mapping.scale_x + mapping.offset_x;
-    const float         base_px = std::round(origin.y * mapping.scale_y + mapping.offset_y);
-    const float         pen_whole = std::floor(pen_px);
-    const int           shift = std::min(kShiftSteps - 1, static_cast<int>((pen_px - pen_whole) * kShiftSteps));
-    if (!std::isfinite(em_x) || !std::isfinite(em_y) || !std::isfinite(pen_px) || !std::isfinite(base_px)) {
-        return false;
+    out.origin = mgPortPrimVertex(prim, pen_x, base_y, 0, 0, 0, none);
+    const gfx::Vertex2D step = mgPortPrimVertex(prim, pen_x + 1, base_y + 1, 0, 0, 0, none);
+    out.px_x = (step.x - out.origin.x) * out.mapping.scale_x;
+    out.px_y = (step.y - out.origin.y) * out.mapping.scale_y;
+    out.em_x = kUnitsPerEm * page.texels_per_unit_x * texel_x * out.px_x;
+    out.em_y = kUnitsPerEm * page.texels_per_unit_y * texel_y * out.px_y;
+    out.pen_px = out.origin.x * out.mapping.scale_x + out.mapping.offset_x;
+    out.base_px = std::round(out.origin.y * out.mapping.scale_y + out.mapping.offset_y);
+    if (!std::isfinite(out.em_x) || !std::isfinite(out.em_y) || !std::isfinite(out.pen_px) ||
+        !std::isfinite(out.base_px) || !(out.px_x > 0) || !(out.px_y > 0)) {
+        return std::nullopt;
     }
-    const Ink *ink = GetInk(ch, em_x, em_y, shift);
+    return out;
+}
+
+// Draws one layer of a placed glyph in a colour (alpha 0x80 opaque); false where it cannot be drawn.
+bool Draw(mgCDrawPrim &prim, const Placement &at, Layer layer, std::uint8_t r, std::uint8_t g, std::uint8_t b,
+          std::uint8_t a) {
+    if (at.ch == 0x20 || at.ch == 0x3000) {
+        return true;
+    }
+    const float pen_whole = std::floor(at.pen_px);
+    const int   shift = std::min(kShiftSteps - 1, static_cast<int>((at.pen_px - pen_whole) * kShiftSteps));
+    const bool  rim = layer != Layer::Fill;
+    const Ink  *ink = GetInk({at.ch, static_cast<int>(std::lround(at.em_x * 16)), static_cast<int>(std::lround(at.em_y * 16)),
+                              shift, layer, rim ? static_cast<int>(std::lround(at.px_x * 16)) : 0,
+                              rim ? static_cast<int>(std::lround(at.px_y * 16)) : 0});
     if (!ink) {
         return false;
     }
     // The image sits on whole target pixels, so each texel lands on one pixel and nothing is resampled.
     auto vertex = [&](float px, float py, float u, float v) {
-        gfx::Vertex2D out = origin;
-        out.x = (px - mapping.offset_x) / mapping.scale_x;
-        out.y = (py - mapping.offset_y) / mapping.scale_y;
+        gfx::Vertex2D out = at.origin;
+        out.x = (px - at.mapping.offset_x) / at.mapping.scale_x;
+        out.y = (py - at.mapping.offset_y) / at.mapping.scale_y;
         out.u = u;
         out.v = v;
+        out.color[0] = r;
+        out.color[1] = g;
+        out.color[2] = b;
+        out.color[3] = a;
         return out;
     };
     const float                        left = pen_whole + static_cast<float>(ink->x0 - 1);
-    const float                        top = base_px + static_cast<float>(ink->y0 - 1);
-    const float                        right = left + static_cast<float>(ink->width + 2);
-    const float                        bottom = top + static_cast<float>(ink->height + 2);
+    const float                        top = at.base_px + static_cast<float>(ink->y0 - 1);
     const auto                         w = static_cast<float>(ink->width + 2);
     const auto                         h = static_cast<float>(ink->height + 2);
-    const std::array<gfx::Vertex2D, 4> quad = {vertex(left, top, 0, 0), vertex(right, top, w, 0),
-                                               vertex(right, bottom, w, h), vertex(left, bottom, 0, h)};
+    const std::array<gfx::Vertex2D, 4> quad = {vertex(left, top, 0, 0), vertex(left + w, top, w, 0),
+                                               vertex(left + w, top + h, w, h), vertex(left, top + h, 0, h)};
     gfx::TextureBinding                binding;
     binding.texture = ink->texture;
     binding.filter = gfx::Filter::Linear;
@@ -263,12 +314,55 @@ bool DrawSharp(mgCDrawPrim &prim, const mgRect<int> &dst, const mgRect<int> &uv,
     return true;
 }
 
+std::uint8_t Alpha(int alpha, float share) {
+    return static_cast<std::uint8_t>(std::clamp(static_cast<int>(std::lround(alpha * share)), 0, 255));
+}
+
+// Draws the outline styles as rims, and the white-and-blue style's blue as one extrusion where retail
+// stacks two copies; false leaves the style, or a cell the bitmap keeps, to retail, whose remaining
+// shadows are copies of the glyph and so already reach the painter through set2DSpriteEasyFont.
+bool DrawSharpFuchi(mgCDrawPrim &prim, const RECT &dst, const RECT &uv, int style, int alpha) {
+    auto place = [&](float dx, float dy) {
+        return Place(prim, dst.x, dst.y, dst.width, dst.height, uv.x, uv.y, uv.width, uv.height, dx, dy);
+    };
+    auto rim = [&](Layer layer) {
+        const auto at = place(0, 0);
+        return at && Draw(prim, *at, layer, 0, 0, 0, Alpha(alpha, FontOutlineAlpha(OutlineOf(layer))));
+    };
+    switch (style) {
+        case FUCHI_OUTLINE:
+            return rim(Layer::Thin);
+        case FUCHI_OUTLINE_THICK:
+            return rim(Layer::Thick);
+        case FUCHI_OUTLINE_WIDE:
+            return rim(Layer::Glow);
+        case FUCHI_SHADOW_WHITE_BLUE: {
+            const auto highlight = place(1, 1);
+            if (!highlight) {
+                return false;
+            }
+            Draw(prim, *highlight, Layer::Fill, 255, 255, 255, Alpha(alpha, 255.0f / 128.0f));
+            // Retail's copies a pixel and two up-left, and the quarter pixels between: one solid block.
+            for (int step = 4; step <= 8; ++step) {
+                const float offset = -step / 4.0f;
+                if (const auto at = place(offset, offset)) {
+                    Draw(prim, *at, Layer::Fill, 42, 43, 49, Alpha(alpha, 1.0f));
+                }
+            }
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
-// Every font cell the game draws passes through here: CFont::DrawChar, its outlines and shadows
-// (set2DSprite_Fuchi draws one per offset, in retail's colours) and the event stopwatch.
+// Every font cell the game draws passes through here: CFont::DrawChar, retail's shadows (one call
+// per copy, in retail's colours) and the event stopwatch.
 PORT_OVERRIDE void set2DSpriteEasyFont(mgCDrawPrim *prim, mgRect<int> dst, mgRect<int> uv, RGBAQ_TYPE *color) {
-    if (DrawSharp(*prim, dst, uv, *color)) {
+    if (const auto at = Place(*prim, dst.left, dst.top, dst.right, dst.bottom, uv.left, uv.top, uv.right, uv.bottom, 0, 0);
+        at && Draw(*prim, *at, Layer::Fill, color->r, color->g, color->b, color->a)) {
         return;
     }
     uv.right += uv.left;
@@ -282,4 +376,10 @@ PORT_OVERRIDE void set2DSpriteEasyFont(mgCDrawPrim *prim, mgRect<int> dst, mgRec
     prim->Vertex(dst.left, dst.top, 0);
     prim->TextureCrd(uv.right, uv.bottom);
     prim->Vertex(dst.right, dst.bottom, 0);
+}
+
+PORT_OVERRIDE void set2DSprite_Fuchi(mgCDrawPrim *prim, RECT destination, RECT texture, int style, int alpha) {
+    if (!DrawSharpFuchi(*prim, destination, texture, style, alpha)) {
+        PortRetailSet2DSpriteFuchi(prim, destination, texture, style, alpha);
+    }
 }

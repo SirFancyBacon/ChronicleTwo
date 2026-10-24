@@ -61,7 +61,7 @@ struct Config : HostSettings {
     bool         shared_badge_exp = false;     /**< Shares a quarter of Monica's absorption with other unlocked badges. */
     ConfigAspect aspect = ConfigAspect::Auto;
     float        ui_scale = 1.0f;
-    bool         font_sharp = false;
+    bool         font_sharp = true;
     bool         mouse_fixed_look = true;
     float        menu_pointer_speed = 1.5f;        /**< Captured menu hand travel per mouse count in window pixels. */
     bool         menu_pointer_acceleration = true; /**< Enables up to twice the menu hand gain for fast captured motion. */

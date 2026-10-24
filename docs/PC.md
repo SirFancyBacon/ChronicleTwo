@@ -4,7 +4,7 @@
 
 The port runs the retail main loop on the shared renderer and mixer, reading extracted PAL disc files. Supported checkpoints include the boot movies, title, costume selection, opening event, Palm Brinks exploration and the first Underground Channel floor. Town and dungeon movement, inventory item use, chapter resources, menus, photos and save/continue have native implementations and bounded replay fixtures. These checkpoints do not establish a complete campaign or every sub-game; the fish race still aborts at its unimplemented loop.
 
-The PC controls include keyboard menu navigation, mouse menus and item drag/drop, town, dungeon and Georama mouse camera control, optional wheel zoom, a PC settings page, JSON save files and Georama towns without a part limit. An optional sharp message font draws the game's own letters as outlines at any resolution. Presentation can interpolate between logic frames independently of the display rate. Ordinary boots leave debug controls disabled; `game.debug_mode=true` or `--jump` enables them explicitly.
+The PC controls include keyboard menu navigation, mouse menus and item drag/drop, town, dungeon and Georama mouse camera control, optional wheel zoom, a PC settings page, JSON save files and Georama towns without a part limit. The message font draws the game's own letters as outlines at any resolution. Presentation can interpolate between logic frames independently of the display rate. Ordinary boots leave debug controls disabled; `game.debug_mode=true` or `--jump` enables them explicitly.
 
 ## Building and running
 
@@ -1667,10 +1667,10 @@ When the controller speaker's device (see "Controller speaker") has four channel
 
 #### Message font
 
-`video.text_font` chooses how the game's text is drawn. `"original"`, the default, draws the retail
-font pages, 16x20-texel cells stretched to the screen. `"sharp"` (**Options → PC SETTINGS → Display →
-Text font**) draws the same letters as outlines from ChronicleTwoMessage, rasterized at the target's
-own resolution. The setting applies to the next drawn text.
+`video.text_font` chooses how the game's text is drawn. `"sharp"`, the default, draws the letters as
+outlines from ChronicleTwoMessage, rasterized at the target's own resolution. `"original"` (**Options →
+PC SETTINGS → Display → Text font**) draws the retail font pages, 16x20-texel cells stretched to the
+screen. The setting applies to the next drawn text.
 
 ChronicleTwoMessage (`port/assets/fonts/ChronicleTwoMessage-Regular.ttf`, copied to `fonts/` beside
 the executable with Kosugi's Apache 2.0 licence and a notice of the changes) is made from Kosugi, the
@@ -1695,8 +1695,19 @@ font table:
 Kana, kanji, Japanese and the small font keep their bitmaps, as does a cell the font cannot draw.
 Retail's layout is untouched: advances, line and page breaks, reveal timing and outline offsets are
 retail's, because retail code still makes every one of those decisions and the painter only fills the
-cell it is given. Outlines and shadows come out right because `set2DSprite_Fuchi` calls the replaced
-function once per offset, in retail's colours.
+cell it is given.
+
+Retail's outlines and shadows (`set2DSprite_Fuchi`) are the glyph drawn again a pixel or two off, made
+for a CRT, which blurred those copies into one soft rim; drawn sharp, they are steps. `set2DSprite_Fuchi`
+is replaced, its retail body kept by a retail bridge (`PortRetailSet2DSpriteFuchi`), and the sharp font
+draws each outline style as one round rim instead, its distance from the glyph measured in logical
+pixels so it stays round where a logical pixel is not square (`port/src/font_outline.cpp`). Each rim
+lays down the ink retail's copies do, measured over a sample of glyphs at 8x: `FUCHI_OUTLINE`'s four
+copies a pixel out are a rim of 0.85 pixels and `FUCHI_OUTLINE_THICK`'s twelve one of 1.67, each with a
+half-pixel soft edge; `FUCHI_OUTLINE_WIDE`'s four faint copies two out are a glow fading to nothing at
+2.5 pixels, 0.312 of the text's alpha at the glyph. The shadows are copies of the glyph moved, already
+smooth, so retail still draws them, each copy through the sharp painter; `FUCHI_SHADOW_WHITE_BLUE`'s two
+blue copies a pixel and two up-left are drawn as one extrusion, with the quarter pixels between them.
 
 `FontPortPageOf` holds how each page draws the font. The European pages draw it as it is. The English
 page draws the same outlines 1.335 times taller and 0.955 times as wide, its pen 0.63 texels left and
@@ -1730,11 +1741,12 @@ Against the retail pages the font's mean per-texel coverage error is 0.039 for A
 starts at 0.053. What remains is mostly the retail hinting, which an outline font should not copy.
 The tools need `scripts/font/requirements.txt`.
 
+`FontOutline.RimsFadeOutAtTheirMeasuredReach` and `FontOutline.RimIsRoundInLogicalPixels` cover the rims.
 `FontPort.MapsEveryPalFontPage` and `FontPort.PageGeometryIsTheFittedOne` cover the mapping and the
 English page's numbers against `message_font.json`; `FontPort.EveryMappedCharacterIsInTheShippedFont`
 renders every character the painter can ask for. `FontPortGpu.SharpDrawingKeepsRetailLayoutAndLineBreaks`
 checks that layout and line breaks are retail's in both modes and that every outline style draws its
-passes on whole pixels. `MessageFont.Check` runs `scripts/font/test_message_font.py`: the font's grid
+shadow copies or its rim on whole pixels. `MessageFont.Check` runs `scripts/font/test_message_font.py`: the font's grid
 and coverage, and, with Kosugi in `DC2_KOSUGI` or the cache, that the tools rebuild it byte for byte.
 
 For a repeatable visual comparison, use `--jump dungeon:0:1 --fast-load --input tools/input/font-dialogue.input
@@ -1999,7 +2011,7 @@ The 22 `#ifndef PORT` guards are 21 in the eight `.cpp` files that hold assembly
 
 `port/include/stubs/<unit>.hpp`, when it exists, is included ahead of `ps2/src/<unit>.cpp`, after `port.h` and nothing else. It declares what the port defines in place of code `PORT` leaves out, and it renames or supplies what the unit takes from MWCC or from the PS2 link alone. Only the port's build sees `port/include`.
 
-The 27 native unit headers are `charasetup`, `collision`, `dataread`, `dng_event`, `dng_main`, `dngfloor`, `dngmenu`, `editctrl`, `editmap2`, `editmenu`, `effect`, `event`, `event_func`, `gamepad`, `gameutil`, `inventmn`, `mainloop`, `menudraw`, `menumain`, `menuop`, `menusys`, `mg_frame`, `mg_math`, `mglib`, `nowload`, `photo`, `title`. `mg_dataset` declares the `CopyFrame` bridge. Their link-name bridges and native caller declarations remain outside retail source.
+The 27 native unit headers are `charasetup`, `collision`, `dataread`, `dng_event`, `dng_main`, `dngfloor`, `dngmenu`, `editctrl`, `editmap2`, `editmenu`, `effect`, `event`, `event_func`, `gamepad`, `gameutil`, `inventmn`, `mainloop`, `menudraw`, `menumain`, `menuop`, `menusys`, `mg_frame`, `mg_math`, `mglib`, `nowload`, `photo`, `title`. `mg_dataset` declares the `CopyFrame` bridge, and `font` the `set2DSprite_Fuchi` bridge. Their link-name bridges and native caller declarations remain outside retail source.
 
 ## Header fixups
 

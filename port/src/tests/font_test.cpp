@@ -14,6 +14,7 @@
 #include <SDL3/SDL.h>
 
 #include "font.hpp"
+#include "font_outline.hpp"
 #include "font_port.hpp"
 #include "gfx_fixture.hpp"
 #include "mainloop.hpp"
@@ -174,6 +175,42 @@ TEST(FontPort, EveryMappedCharacterIsInTheShippedFont) {
     EXPECT_EQ(mapped, 119);
 }
 
+// The rims' profiles: a soft half-pixel edge at their measured radius, and the glow fading out.
+TEST(FontOutline, RimsFadeOutAtTheirMeasuredReach) {
+    EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Thin, 0.0f), 1.0f);
+    EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Thin, 0.6f), 1.0f);
+    EXPECT_NEAR(FontOutlineOpacity(FontOutline::Thin, 0.85f), 0.5f, 1e-5f);
+    EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Thin, FontOutlineReach(FontOutline::Thin)), 0.0f);
+    EXPECT_NEAR(FontOutlineOpacity(FontOutline::Thick, 1.67f), 0.5f, 1e-5f);
+    EXPECT_GT(FontOutlineReach(FontOutline::Thick), FontOutlineReach(FontOutline::Thin));
+    EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Glow, 0.0f), 1.0f);
+    EXPECT_NEAR(FontOutlineOpacity(FontOutline::Glow, 1.25f), 0.5f, 1e-5f);
+    EXPECT_FLOAT_EQ(FontOutlineOpacity(FontOutline::Glow, 2.5f), 0.0f);
+    EXPECT_LT(FontOutlineAlpha(FontOutline::Glow), 0.5f);
+    EXPECT_FLOAT_EQ(FontOutlineAlpha(FontOutline::Thin), 1.0f);
+}
+
+// A rim is round in logical pixels, so where a logical pixel is 4 target pixels across and 2 down it
+// reaches twice as far across, and the glyph stays fully covered inside it.
+TEST(FontOutline, RimIsRoundInLogicalPixels) {
+    constexpr int                   size = 4;
+    const std::vector<std::uint8_t> square(size * size, 255);
+    const auto                      rim = FontOutlineRim(square, size, size, 4.0f, 2.0f, FontOutline::Thin);
+    EXPECT_EQ(rim.margin_x, 6);
+    EXPECT_EQ(rim.margin_y, 4);
+    const int width = size + 2 * rim.margin_x;
+    ASSERT_EQ(rim.alpha.size(), static_cast<std::size_t>(width * (size + 2 * rim.margin_y)));
+    auto      at = [&](int x, int y) { return rim.alpha[static_cast<std::size_t>(y + rim.margin_y) * width + x + rim.margin_x]; };
+    const int middle = size / 2;
+    EXPECT_EQ(at(middle, middle), 255);
+    EXPECT_EQ(at(size - 1 + 2, middle), 255); // half a logical pixel right
+    EXPECT_EQ(at(size - 1 + 6, middle), 0);   // a logical pixel and a half right
+    EXPECT_EQ(at(middle, size - 1 + 1), 255); // half a logical pixel down
+    EXPECT_EQ(at(middle, size - 1 + 3), 0);   // a logical pixel and a half down
+    // Corners are round: the diagonal pixel as far out as the side one is fainter.
+    EXPECT_LT(at(size - 1 + 4, size - 1 + 2), at(size - 1 + 4, middle));
+}
+
 TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
     const auto root = std::filesystem::temp_directory_path() /
                       ("dc2_font_" + std::to_string(dc::test::ProcessId()));
@@ -253,9 +290,10 @@ TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
     EXPECT_EQ(Entries(mes), tokenized);
     EXPECT_TRUE(std::ranges::any_of(tokenized, [](const Entry &e) { return std::get<0>(e) == MES_CODE_PAGE; }));
 
-    // Retail's outline code draws each style's passes through the painter, the fill last with its alpha
-    // multiplied, each a quad of the glyph's image on whole pixels inside the cell.
-    constexpr std::array<int, 9> passes = {1, 2, 2, 5, 3, 2, 5, 4, 13};
+    // Shadows are retail's copies through the painter; outlines are one rim each; the white-and-blue
+    // style's blue is five steps of one extrusion. The fill comes last with its alpha multiplied, each
+    // a quad of the glyph's image on whole pixels inside the cell.
+    constexpr std::array<int, 9> passes = {1, 2, 2, 2, 3, 2, 2, 7, 2};
     char                         letter[] = "W";
     font.SetColor(23, 45, 67, 96);
     font.alpha = 64;
@@ -286,5 +324,11 @@ TEST(FontPortGpu, SharpDrawingKeepsRetailLayoutAndLineBreaks) {
         // Inside the half cell at 40, give or take the border and the English page's pen, left of the cell.
         EXPECT_GE(fill[0].x, 39.0f);
         EXPECT_LE(fill[1].x, 49.0f);
+        if (style == FUCHI_OUTLINE || style == FUCHI_OUTLINE_THICK || style == FUCHI_OUTLINE_WIDE) {
+            const auto &rim = geometry.front();
+            EXPECT_EQ(rim[0].color[0], 0);
+            EXPECT_LT(rim[0].x, fill[0].x - 0.5f); // the rim reaches past the glyph
+            EXPECT_TRUE(on_pixel(rim[0].x, mapping.scale_x, mapping.offset_x));
+        }
     }
 }
