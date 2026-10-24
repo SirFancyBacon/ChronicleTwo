@@ -28,9 +28,9 @@ VERSION = "1.000"
 VERSION_DATE = "Sat Oct 24 00:00:00 2026"
 
 
-def kosugi_part(source, ch, affine, strength, clip):
+def kosugi_part(source, ch, affine, strength, clip, squash):
     """A Kosugi component as the fitter rendered it, as a pathops path in master units."""
-    raw = source.outline(ch, affine, strength)
+    raw = source.outline(ch, affine, strength, squash)
     path = pathops.Path()
     pen = PointToSegmentPen(path.getPen())
     start = 0
@@ -65,6 +65,45 @@ def outline(source, components):
         part = component[1] if component[0] == "path" else kosugi_part(source, *component[1:])
         merged = pathops.op(merged, part, pathops.PathOp.UNION)
     return merged
+
+
+def side_profiles(path, bottom, top, step=8):
+    """Leftmost and rightmost ink at each sampled height between bottom and top, None where a row is blank."""
+    x0, _, x1, _ = path.bounds
+    rows = []
+    for y in range(int(bottom) + step // 2, int(top), step):
+        xs = [x for x in range(int(x0) - 1, int(x1) + 2, 2) if path.contains((x, y))]
+        rows.append((xs[0], xs[-1]) if xs else None)
+    return rows
+
+
+def spacing(ch, path, spacing_parameters, x_height, cap_height):
+    """(shift, advance): how far to move ch so its sidebearings balance its neighbours', and its width.
+
+    Each side's white is averaged over the glyph's zone (the x-height for lower case, the cap height for
+    capitals, its own ink for punctuation), counting openings no deeper than `depth`; the sidebearing
+    tops that white up to what a straight stem gets, `stem_sidebearing` (HT Letterspacer's method).
+    """
+    x0, y0, x1, y1 = path.bounds
+    if ch.isupper() or ch in "\u00c6\u0152":
+        bottom, top = 0, cap_height
+    elif ch.isalpha():
+        bottom, top = 0, x_height
+    else:
+        bottom, top = max(0, y0), min(cap_height, y1)
+    if top <= bottom:
+        bottom, top = y0, y1
+    rows = side_profiles(path, bottom, top)
+    inked = [r for r in rows if r]
+    if not inked:
+        return 0, mf.HALF
+    left, right = min(r[0] for r in inked), max(r[1] for r in inked)
+    depth = spacing_parameters["depth"]
+    white_left = sum(min(r[0] - left, depth) if r else depth for r in rows) / len(rows)
+    white_right = sum(min(right - r[1], depth) if r else depth for r in rows) / len(rows)
+    stem = spacing_parameters["stem_sidebearing"]
+    lsb, rsb = stem - white_left, stem - white_right
+    return lsb - left, int(round(lsb + (right - left) + rsb))
 
 
 def signed_area(recording):
@@ -104,10 +143,18 @@ def build(kosugi, parameters, out):
     glyf = {".notdef": TTGlyphPen(None).glyph()}
     metrics = {".notdef": (mf.HALF, 0)}
     cmap = {}
+    paths = {ch: outline(source, table[ch][1]) for ch in table}
+    x_height, cap_height = paths["x"].bounds[3], paths["H"].bounds[3]
     for ch in sorted(table):
         advance, components = table[ch]
         name = glyph_name(ch)
-        glyph = tt_glyph(outline(source, components))
+        path = paths[ch]
+        if ch == " ":
+            advance = int(round(mf.HALF * parameters["spacing"]["space"]))
+        elif ch in mf.PROPORTIONAL:
+            shift, advance = spacing(ch, path, parameters["spacing"], x_height, cap_height)
+            path = path.transform(1, 0, 0, 1, shift, 0)
+        glyph = tt_glyph(path)
         glyf[name] = glyph
         # FreeType and stb_truetype place an outline by its side bearing, so it is the outline's left edge.
         metrics[name] = (advance, glyph.xMin if glyph.numberOfContours else 0)

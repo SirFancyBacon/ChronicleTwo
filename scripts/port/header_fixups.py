@@ -74,6 +74,11 @@ FIXUPS = [
     ("menucls1.hpp", "    void DrawMsg();",
      "    void DrawMsg();\n"
      "    void PortRetailDrawMsg();"),
+    # Message windows are kerned after retail lays them out, which stays under this name.
+    ("nd_meswin.hpp", "    void MakeMesWin(char *str, int open, int reset_fade);",
+     "    void MakeMesWin(char *str, int open, int reset_fade);\n"
+     "    void PortRetailMakeMesWin(int mes_no);\n"
+     "    void PortRetailMakeMesWin(char *str, int open, int reset_fade);"),
     ("nd_meswin.hpp", "#ifndef MES_WINDOW_OUT_OF_LINE_INIT", "#if 1"),
     ("collision.hpp", "memset(&bbox, 0, sizeof(bbox));", "memset(static_cast<void *>(&bbox), 0, sizeof(bbox));"),
     # kernel32 exports these three names on Windows; the PS2 kernel's versions take their own link names so they never bind to kernel32.

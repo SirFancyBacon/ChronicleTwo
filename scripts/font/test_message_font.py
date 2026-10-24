@@ -39,9 +39,23 @@ class MessageFont(unittest.TestCase):
     def test_glyphs_sit_on_the_retail_cell_grid(self):
         self.assertEqual(self.font["head"].unitsPerEm, mf.UNITS_PER_EM)
         self.assertEqual((self.font["hhea"].ascent, -self.font["hhea"].descent), (mf.ASCENT, mf.DESCENT))
-        advances = {ch: self.font["hmtx"][self.cmap[ord(ch)]][0] for ch in "A~é¿\uff65"}
-        self.assertEqual(set(advances.values()), {mf.HALF})
-        self.assertEqual(self.font["hmtx"][self.cmap[ord("○")]][0], mf.FULL)
+        advance = lambda ch: self.font["hmtx"][self.cmap[ord(ch)]][0]  # noqa: E731
+        # Figures and symbols keep the retail cell, so they still line up in columns.
+        self.assertEqual({advance(ch) for ch in "0123456789+%~" + chr(0xFF65)}, {mf.HALF})
+        self.assertEqual(advance("○"), mf.FULL)
+
+    def test_letters_take_their_own_width(self):
+        advance = lambda ch: self.font["hmtx"][self.cmap[ord(ch)]][0]  # noqa: E731
+        parameters = mf.load_parameters()
+        self.assertLess(advance("i"), advance("n") / 2)
+        self.assertLess(advance("l"), advance("n") / 2)
+        self.assertLess(advance("r"), advance("n"))
+        self.assertGreater(advance("m"), advance("n"))
+        self.assertEqual(advance(" "), round(mf.HALF * parameters["spacing"]["space"]))
+        # Every letter's ink starts its own sidebearing in from the pen, never left of it by much.
+        glyf = self.font["glyf"]
+        for ch in "inmoGHrt":
+            self.assertGreater(glyf[self.cmap[ord(ch)]].xMin, 0, ch)
 
     def test_every_character_pal_text_draws_is_in_the_font(self):
         parameters = mf.load_parameters()

@@ -316,8 +316,8 @@ std::vector<Page> MakePages() {
                                 Choice<&Config::interpolation>("video.interpolation", "Interpolation", "Smooths display frames between game ticks.", {"Off", "On"}),
                                 Choice<&Config::aspect>("video.aspect", "Aspect ratio", "Auto fills the window. 4:3 adds black side bars.", {"Auto", "4:3"}),
                                 Number<&Config::ui_scale>("video.ui_scale", "UI scale", "Scales menus and HUD. Large values can crop the UI.\nUse Left to reduce the scale if it no longer fits.", {0.5, 0.65, 0.75, 0.85, 1, 1.1, 1.25, 1.5}, 100, "%"),
-                                Choice<&Config::font_sharp>("video.text_font", "Text font", "Sharp draws the same letters as outlines,\n"
-                                                                                            "clear at any resolution.",
+                                Choice<&Config::font_sharp>("video.text_font", "Text font", "Sharp draws the letters as outlines, clear at any\n"
+                                                                                            "resolution, each spaced by its own width.",
                                                             {"Original", "Sharp"}),
                                 Choice<&Config::show_fps>("video.show_fps", "Show FPS", "Shows the display and tick rates in a window.", {"Off", "On"}),
                             }  },

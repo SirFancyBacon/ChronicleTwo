@@ -1,8 +1,10 @@
 #include "font.hpp"
+#include "mw_runtime.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <iterator>
 #include <map>
@@ -112,7 +114,11 @@ FontPortPage FontPortPageOf(int language) {
 namespace {
 
 constexpr float kUnitsPerEm = 1280.0f;
-constexpr int   kShiftSteps = 4; // a glyph is drawn at a quarter-pixel pen; its baseline at a whole pixel
+constexpr float kHalfWidth = 512.0f; // a half-width cell's advance, in font units
+constexpr int   kShiftSteps = 4;     // a glyph is drawn at a quarter-pixel pen; its baseline at a whole pixel
+
+// The live FontPortPen's fraction of a logical pixel.
+float pen_fraction = 0.0f;
 
 bool Ready() {
     static bool tried = false;
@@ -129,6 +135,12 @@ bool Ready() {
         }
     }
     return loaded;
+}
+
+// The loaded font table's codes, two bytes a font number.
+std::span<const std::uint8_t> LoadedTable() {
+    const int count = std::clamp(GetYoyakuTblNum(), 0, static_cast<int>(sizeof(FONT_TBL_BIN::yoyaku_tbl) / 2));
+    return {GetYoyakuTblTop(), static_cast<std::size_t>(count) * 2};
 }
 
 // A glyph's fill, or one of the rims drawn for retail's outline styles.
@@ -244,8 +256,7 @@ std::optional<Placement> Place(const mgCDrawPrim &prim, int x, int y, int w, int
     }
     Placement out;
     const int font_no = v / FONT_TEX_CHAR_H * FONT_TEX_COLUMNS + u / FONT_TEX_CHAR_W;
-    const int count = std::clamp(GetYoyakuTblNum(), 0, static_cast<int>(sizeof(FONT_TBL_BIN::yoyaku_tbl) / 2));
-    out.ch = FontPortCharacter(LanguageCode, font_no, {GetYoyakuTblTop(), static_cast<std::size_t>(count) * 2});
+    out.ch = FontPortCharacter(LanguageCode, font_no, LoadedTable());
     if (out.ch == 0 || !Ready()) {
         return std::nullopt;
     }
@@ -254,7 +265,7 @@ std::optional<Placement> Place(const mgCDrawPrim &prim, int x, int y, int w, int
     // Logical pixels a texel: retail stretches the cell's texels over dst.
     const float        texel_x = static_cast<float>(w) / static_cast<float>(u_w);
     const float        texel_y = static_cast<float>(h) / static_cast<float>(v_h);
-    const float        pen_x = static_cast<float>(x) + dx + page.pen_x * texel_x;
+    const float        pen_x = static_cast<float>(x) + pen_fraction + dx + page.pen_x * texel_x;
     const float        base_y = static_cast<float>(y) + dy + page.baseline * texel_y;
     const std::uint8_t none[4] = {};
     // Vertex units a logical pixel, and the pen in target pixels.
@@ -358,6 +369,24 @@ bool DrawSharpFuchi(mgCDrawPrim &prim, const RECT &dst, const RECT &uv, int styl
 
 } // namespace
 
+bool FontPortProportional() { return ConfigGet().font_sharp && Ready(); }
+
+float FontPortHalfAdvance(int font_no) {
+    if (!FontPortProportional()) {
+        return 1.0f;
+    }
+    const char32_t ch = FontPortCharacter(LanguageCode, font_no, LoadedTable());
+    float          em = 0.0f;
+    if (ch == 0 || !ttffont::GetAdvance(ch, em)) {
+        return 1.0f;
+    }
+    return em * kUnitsPerEm / kHalfWidth;
+}
+
+FontPortPen::FontPortPen(float fraction) : previous_(pen_fraction) { pen_fraction = fraction; }
+
+FontPortPen::~FontPortPen() { pen_fraction = previous_; }
+
 // Every font cell the game draws passes through here: CFont::DrawChar, retail's shadows (one call
 // per copy, in retail's colours) and the event stopwatch.
 PORT_OVERRIDE void set2DSpriteEasyFont(mgCDrawPrim *prim, mgRect<int> dst, mgRect<int> uv, RGBAQ_TYPE *color) {
@@ -382,4 +411,109 @@ PORT_OVERRIDE void set2DSprite_Fuchi(mgCDrawPrim *prim, RECT destination, RECT t
     if (!DrawSharpFuchi(*prim, destination, texture, style, alpha)) {
         PortRetailSet2DSpriteFuchi(prim, destination, texture, style, alpha);
     }
+}
+
+// Retail's measure and draw of a line of menu text, with each half-width character advancing by its own width in
+// the message font (FontPortHalfAdvance). The pen runs between pixels; each glyph is drawn at the whole pixel left of
+// it and carries the rest in a FontPortPen. The width rounds up, so the text stays inside what was measured.
+PORT_OVERRIDE void CFont::CalcDrawWH(char *text, int *width, int *height) {
+    const int len = static_cast<int>(strlen(text));
+    float     max_width = 0;
+    int       max_height = 0;
+    float     pen_x = 0;
+    int       pen_y = 0;
+    int       pos = 0;
+    auto      reach = [&](int bottom) {
+        max_width = std::max(max_width, pen_x);
+        max_height = std::max(max_height, bottom);
+    };
+
+    while (pos < len) {
+        char *cursor = &text[pos];
+
+        if (const int font_no = GetAlphabeticalFontNo_cp(cursor); 0 < font_no) {
+            pen_x += static_cast<float>(clearance_w / 2) * FontPortHalfAdvance(font_no);
+            pos += 9;
+            reach(pen_y + clearance_h);
+        } else if (const u16 gaiji = GetFontGaijiFontNo(cursor); gaiji != 0) {
+            pen_x += static_cast<float>(GetFontGaijiHankaku(gaiji) != 0 ? clearance_w / 2 : clearance_w);
+            pos += 2;
+            reach(pen_y + clearance_h);
+        } else if (const u16 gaiji_no = GetGaijiFontNo(cursor); gaiji_no >= 0xFD00 && gaiji_no < 0xFD32) {
+            pen_x += static_cast<float>(GetGaijiW(gaiji_no));
+            pos += GetGaijiLen(gaiji_no);
+            reach(pen_y + GetGaijiH(gaiji_no));
+        } else if (const int half = GetHalfFontNo(*cursor); half == -2) {
+            pen_x = 0;
+            pos += 1;
+            pen_y += clearance_h;
+        } else if (CheckHalfFont(half) != 0) {
+            pen_x += static_cast<float>(clearance_w / 2) * FontPortHalfAdvance(half);
+            pos += 1;
+            reach(pen_y + clearance_h);
+        } else {
+            pen_x += static_cast<float>(clearance_w);
+            pos += 2;
+            reach(pen_y + clearance_h);
+        }
+    }
+
+    *width = static_cast<int>(std::ceil(max_width));
+    *height = max_height;
+}
+
+PORT_OVERRIDE void CFont::DrawDirect(char *text, int x, int y) {
+    SetPos(x, y);
+
+    mgCDrawPrim prim;
+
+    MySetPrim(&prim, 1, 0);
+
+    int height = fptosi(offset_y);
+    prim.offset_x = fptosi(offset_x) * 16;
+    prim.offset_y = height * 16;
+    prim.Begin(MG_PRIM_SPRITE);
+    const int len = static_cast<int>(strlen(text));
+    float     pen_x = 0;
+    int       pen_y = 0;
+    int       pos = 0;
+    // Draws at the whole pixel left of the pen, carrying the rest to the painter.
+    auto at_pen = [&](auto draw) {
+        const float       exact = static_cast<float>(pos_x) + pen_x;
+        const int         whole = static_cast<int>(std::floor(exact));
+        const FontPortPen kerned(exact - static_cast<float>(whole));
+        draw(whole);
+    };
+
+    while (pos < len) {
+        char *cursor = &text[pos];
+
+        if (const int font_no = GetAlphabeticalFontNo_cp(cursor); 0 < font_no) {
+            at_pen([&](int at) { DrawChar(&prim, font_no, at, pos_y + pen_y, 1, color, (int) alpha); });
+            pen_x += static_cast<float>(clearance_w / 2) * FontPortHalfAdvance(font_no);
+            pos += 9;
+        } else if (const u16 gaiji = GetFontGaijiFontNo(cursor); gaiji != 0) {
+            at_pen([&](int at) { DrawChar(&prim, gaiji & 0xFFFF, at, pos_y + pen_y, 1, color, (int) alpha); });
+            pen_x += static_cast<float>(GetFontGaijiHankaku(gaiji) != 0 ? clearance_w / 2 : clearance_w);
+            pos += 2;
+        } else if (const u16 gaiji_no = GetGaijiFontNo(cursor); gaiji_no >= 0xFD00 && gaiji_no < 0xFD32) {
+            at_pen([&](int at) { DrawGaiji(&prim, gaiji_no, at, pos_y + pen_y); });
+            pen_x += static_cast<float>(GetGaijiW(gaiji_no));
+            pos += GetGaijiLen(gaiji_no);
+        } else if (const int half = GetHalfFontNo(*cursor); half == -2) {
+            pen_x = 0;
+            pos += 1;
+            pen_y += clearance_h;
+        } else if (CheckHalfFont(half) != 0) {
+            at_pen([&](int at) { DrawChar(&prim, half, at, pos_y + pen_y, 1, color, (int) alpha); });
+            pen_x += static_cast<float>(clearance_w / 2) * FontPortHalfAdvance(half);
+            pos += 1;
+        } else {
+            at_pen([&](int at) { DrawChar(&prim, cursor, at, pos_y + pen_y); });
+            pen_x += static_cast<float>(clearance_w);
+            pos += 2;
+        }
+    }
+
+    prim.End();
 }

@@ -56,6 +56,10 @@ HALF_MIDDLE_DOT = "\uff65"  # the European page's half-width ・
 # two of Kosugi's full stops and the cedilla a drawn stroke, so neither has a source glyph.
 MARKS = {"\u0300": "`", "\u0301": "´", "\u0302": "^", "\u0303": "˜", "\u0308": "¨", "\u030a": "°", "\u0327": "ȷ"}
 ASCII = [chr(c) for c in range(0x21, 0x7F) if chr(c) != "\\"]
+# Glyphs that take their own width in the sharp font's layout; the rest keep the retail cell, so
+# figures and symbols still line up in columns. Letters, the punctuation of running text and the space.
+PROPORTIONAL = (set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") | {chr(cp) for cp in ACCENTED if cp != 0xB0}
+                | set(".,:;!?'\"()-& ") | {"\u2018", "\u2019", "\u201c", "\u201d"})
 
 GLOBAL_KEY = "kosugi_to_master"
 IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
@@ -135,8 +139,9 @@ class Source:
             start = end + 1
         raw.n_contours, raw.n_points = kept_ends, kept_points
 
-    def outline(self, ch, affine, strength=(0.0, 0.0)):
-        """Moves ch into master space: the affine, then EmboldenXY by strength (master units)."""
+    def outline(self, ch, affine, strength=(0.0, 0.0), squash=None):
+        """Moves ch into master space: the affine, then EmboldenXY by strength (master units), then, with
+        squash = (floor, top), everything above floor pressed down so the glyph's top is at top."""
         raw = self.load(ch)
         outline = ctypes.byref(raw)
         k = 1.0 / self.unit
@@ -144,6 +149,14 @@ class Source:
         transform(outline, (a * k, b * k, c * k, d * k, e, f))
         if strength[0] or strength[1]:
             freetype.raw.FT_Outline_EmboldenXY(outline, int(round(strength[0])), int(round(strength[1])))
+        if squash:
+            floor, top = squash
+            highest = max(raw.points[i].y for i in range(raw.n_points))
+            if highest > floor:
+                ratio = (top - floor) / (highest - floor)
+                for i in range(raw.n_points):
+                    if raw.points[i].y > floor:
+                        raw.points[i].y = int(round(floor + (raw.points[i].y - floor) * ratio))
         return raw
 
     def ink(self, ch, affine=IDENTITY):
@@ -155,9 +168,9 @@ class Source:
         ys = b * points[:, 0] + d * points[:, 1] + f
         return xs.min(), ys.min(), xs.max(), ys.max()
 
-    def coverage(self, ch, affine, strength, page, baseline, width, height):
+    def coverage(self, ch, affine, strength, page, baseline, width, height, squash=None):
         """Coverage of one component as page draws it, the pen at (0, baseline)."""
-        raw = self.outline(ch, affine, strength)
+        raw = self.outline(ch, affine, strength, squash)
         transform(ctypes.byref(raw), page)
         slot = self.face.glyph
         slot.render(freetype.FT_RENDER_MODE_NORMAL)
@@ -330,8 +343,8 @@ def render(source, recipe, page, width, height=20, drawn=None):
             part = DrawnSource(component[1])
             cover = part.coverage(PART, IDENTITY, (0.0, 0.0), lift, baseline, width, height)
         else:
-            _, ch, affine, strength, clip = component
-            cover = source.coverage(ch, affine, strength, lift, baseline, width, height)
+            _, ch, affine, strength, clip, squash = component
+            cover = source.coverage(ch, affine, strength, lift, baseline, width, height, squash)
             if clip:
                 cover *= clip_mask(clip, compose(lift, affine), baseline, width, height)
         out = np.maximum(out, cover)
@@ -367,8 +380,8 @@ def descend(f, params, steps, rounds=3, bounds=None):
 
 # ---- Recipes ----
 
-def component(ch, affine, strength=(0.0, 0.0), clip=None):
-    return ("kosugi", ch, tuple(affine), tuple(strength), clip)
+def component(ch, affine, strength=(0.0, 0.0), clip=None, squash=None):
+    return ("kosugi", ch, tuple(affine), tuple(strength), clip, squash)
 
 
 class Recipes:
@@ -389,7 +402,17 @@ class Recipes:
     def ascii(self, ch, override=None):
         p = dict(kx=1.0, ky=1.0, tx=0.0, ty=0.0, shear=0.0, weight=0.0)
         p.update(self.p["ascii"].get(ch, {}) if override is None else override)
-        return self.adjusted(ch, **p)
+        design = self.p.get("design", {}).get(ch, {}) if override is None else {}
+        if "widen" in design:
+            # Wider to the right by `widen` master units, the left edge where it was, stems kept.
+            x0, _, x1, _ = self.source.ink(ch, self.adjusted(ch, **p)[2])
+            k = (x1 - x0 + design["widen"]) / (x1 - x0)
+            p["kx"] *= k
+            p["tx"] += design["widen"] / 2
+        letter = self.adjusted(ch, **p)
+        if "squash_above" in design:
+            letter = component(letter[1], letter[2], letter[3], None, tuple(design["squash_above"]))
+        return letter
 
     def placed(self, ch, kx, ky, x, y, rotate=False):
         """ch scaled about its ink centre with stems kept, turned half a turn when asked, its ink centred on (x, y)."""
@@ -418,7 +441,7 @@ class Recipes:
 
     def accent_base(self, base, case):
         ky, ty = self.p["accents"]["capital_squash"] if case == "upper" else (1.0, 0.0)
-        _, name, affine, strength, _ = self.ascii(base)
+        _, name, affine, strength, _, _ = self.ascii(base)
         # Lowered about the baseline under a capital's accent, stems kept like any other correction.
         affine = compose((1, 0, 0, ky, 0, ty), affine)
         return component(name, affine, (strength[0], strength[1] - (ky - 1) * STEM_Y))
@@ -469,7 +492,7 @@ class Recipes:
         bowls = self.placed("3", kx, ky, bx, by)
         a, _, _, _, e, _ = bowls[2]
         arch_top = self.source.ink(bowls[1], bowls[2])[3]
-        return [self.stem(x, arch_top, bottom), bowls[:4] + (((x - e) / a, -400.0, 2000.0, 1200.0),)]
+        return [self.stem(x, arch_top, bottom), component(bowls[1], bowls[2], bowls[3], ((x - e) / a, -400.0, 2000.0, 1200.0))]
 
     def turned(self, ch, v):
         """The master's ch turned half a turn about its ink centre and moved (tx, ty)."""

@@ -17,3 +17,25 @@ struct FontPortPage {
 };
 
 FontPortPage FontPortPageOf(int language);
+
+// Whether text takes ChronicleTwoMessage's own letter widths: while the font is drawn sharp and has loaded. The
+// original font keeps retail's layout, every half-width character in the same cell.
+bool FontPortProportional();
+
+// How many of retail's half-width advances the half-width character at font_no moves the pen: its advance in the
+// font over the half-width cell's while FontPortProportional, and 1 otherwise or where the font does not draw it.
+// Digits and symbols keep the cell's width, so figures still line up in columns.
+float FontPortHalfAdvance(int font_no);
+
+// While one lives, glyphs sit `fraction` of a logical pixel right of the whole pixel they are drawn at: a kerned pen
+// falls between the pixels retail's text positions hold.
+class FontPortPen {
+public:
+    explicit FontPortPen(float fraction);
+    ~FontPortPen();
+    FontPortPen(const FontPortPen &) = delete;
+    FontPortPen &operator=(const FontPortPen &) = delete;
+
+private:
+    float previous_;
+};

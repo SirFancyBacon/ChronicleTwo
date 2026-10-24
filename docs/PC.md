@@ -1693,9 +1693,32 @@ font table:
   “ U+E001, ” U+E002, ’ U+E004, ° U+E005.
 
 Kana, kanji, Japanese and the small font keep their bitmaps, as does a cell the font cannot draw.
-Retail's layout is untouched: advances, line and page breaks, reveal timing and outline offsets are
-retail's, because retail code still makes every one of those decisions and the painter only fills the
-cell it is given.
+
+Drawn sharp, each half-width character takes its own width in the font. The original font sets every
+one in the same cell, 7 pixels apart at the usual size, which leaves an i or an l standing apart from
+its word; the font's letters are spaced as a type designer spaces them (see the build below), and
+`FontPortHalfAdvance` gives a character's advance over the cell's. Retail code still breaks lines and
+pages and reveals and times the text; only the pen moves:
+
+- Message windows: `ClsMes::MakeMesWin` (both overloads, `port/src/nd_meswin_kern.cpp`) wraps retail's
+  layout through the `PortRetailMakeMesWin` bridge. Each laid-out character then moves by how much the
+  half-width characters before it on its line widen or narrow: retail's half advance
+  (`font_w * half_font_w_percent`, or `font_w / 2` for a space) times the font's advance over the
+  cell's, less retail's. Each line's width moves by its whole shift, and the text width, the line
+  indents and the bubble are sized again from those widths as retail sized them. A space whose width
+  the text sets keeps it: the European text narrows its spaces with a width code at the start of a
+  line (0xF805, 0xF806). While retail lays out, `GetStrWidth` and `GetMesWidth_system` measure as retail
+  does, so the names and items it inserts move once.
+- A window's table holds whole pixels, so each window keeps its characters' pens beside it.
+  `ClsMes::DrawFont`, a copy of retail's, draws each glyph at the whole pixel left of its pen and
+  carries the rest to the painter (`FontPortPen`); button and digit pictures take the nearer pixel.
+- `GetStrWidth` and `GetMesWidth_system`, which menus measure names and items with, add each
+  half-width character's change. `CFont::DrawDirect` and `CalcDrawWH`, the menus' own text and PC
+  SETTINGS, advance by it; `CalcDrawWH` rounds up, so text stays inside the width it was measured at.
+- Figures and symbols keep the cell, so numbers still line up in columns. Full-width characters,
+  button pictures and the European page's font symbols advance as retail's do.
+
+The original font keeps retail's layout exactly.
 
 Retail's outlines and shadows (`set2DSprite_Fuchi`) are the glyph drawn again a pixel or two off, made
 for a CRT, which blurred those copies into one soft rim; drawn sharp, they are steps. `set2DSprite_Fuchi`
@@ -1735,6 +1758,12 @@ pages of the user's own extraction:
   letters squeezed together, and the quotes single or paired marks.
 - Full-width symbols are fitted on both pages where both draw them; families (the figures, each pair
   of arrows or brackets) share their shape.
+- A few letters take a change of design over the retail font (`design`): the top of the t comes down
+  to 598 units, and G is a texel wider to the right.
+- Letters and punctuation are spaced as HT Letterspacer spaces them (`spacing`): each side's white
+  within the letter's zone (the x-height, the cap height, or a mark's own ink), counting openings no
+  deeper than 48 units, is topped up to the sidebearing of a straight stem, 80 units. A space is 0.7
+  of a cell. Figures and symbols keep the half-width cell.
 
 Against the retail pages the font's mean per-texel coverage error is 0.039 for ASCII on either page,
 0.037 for the European page's other letters and 0.026 for full-width symbols; Kosugi as it comes
@@ -1744,10 +1773,14 @@ The tools need `scripts/font/requirements.txt`.
 `FontOutline.RimsFadeOutAtTheirMeasuredReach` and `FontOutline.RimIsRoundInLogicalPixels` cover the rims.
 `FontPort.MapsEveryPalFontPage` and `FontPort.PageGeometryIsTheFittedOne` cover the mapping and the
 English page's numbers against `message_font.json`; `FontPort.EveryMappedCharacterIsInTheShippedFont`
-renders every character the painter can ask for. `FontPortGpu.SharpDrawingKeepsRetailLayoutAndLineBreaks`
-checks that layout and line breaks are retail's in both modes and that every outline style draws its
-shadow copies or its rim on whole pixels. `MessageFont.Check` runs `scripts/font/test_message_font.py`: the font's grid
-and coverage, and, with Kosugi in `DC2_KOSUGI` or the cache, that the tools rebuild it byte for byte.
+renders every character the painter can ask for. `FontPort.SharpLettersTakeTheirOwnWidths` covers the
+advances in both modes, and `FontPort.MessageWindowsTakeTheLettersWidths` a window's characters, lines,
+bubble, figures and set-width spaces. `FontPortGpu.SharpDrawingKeepsRetailTablesAndDrawsEachStyle` checks
+that retail's table builder is unchanged in both modes, that the menus' measure takes the font's
+widths, that every outline style draws its shadow copies or its rim on whole pixels, and that a
+`FontPortPen` moves the glyph. `MessageFont.Check` runs `scripts/font/test_message_font.py`: the font's
+grid, its letters' widths and coverage, and, with Kosugi in `DC2_KOSUGI` or the cache, that the tools
+rebuild it byte for byte.
 
 For a repeatable visual comparison, use `--jump dungeon:0:1 --fast-load --input tools/input/font-dialogue.input
 --frames 1050 --screenshot caption.png --screenshot-display 1` with a fresh save folder for each setting.
@@ -2027,6 +2060,7 @@ MWCC accepts a `void Draw()` that hides the base's `int Draw()` and gives it a n
 - `editmenu.hpp`: `CMenuGeorama::place_no`, `place_name`, `placed_list` and `house_list` are pointers to the port's vectors, set to `NULL` by the constructor in place of its four `memset`s.
 - `dngmenu.hpp`: `CMenuTreeMap` declares `PortRetailStep` and `PortRetailDraw`, the retail bridges that the floor monster list's `Step` and `Draw` seams call (see "How `port/src` takes precedence").
 - `scenesnd.hpp`: `CScene` declares `PortRetailDeleteMap`, the retail bridge the map delete calls after it releases the event handles into the map (see "Event handles across a map change").
+- `nd_meswin.hpp`: `ClsMes` declares both `PortRetailMakeMesWin`, the retail bridges the message font's kerning wraps (see "Message font").
 - `nd_meswin.hpp`: `#ifndef MES_WINDOW_OUT_OF_LINE_INIT` becomes `#if 1`, so `ClsMes::Init` is inline in every unit. `dngmenu.cpp`'s out-of-line copy was a strong definition and collided with the COMDAT copies on COFF.
 - `collision.hpp`: `memset` takes `static_cast<void *>`, because `mgVu0FBOX` is not trivially copyable and `-Wnontrivial-memcall` rejects it.
 - `mapload.hpp`: `CFuncPoint` gets a memberwise copy assignment on its constructor's line. `InventData`'s `mgVu0FBOX` makes the union's implicit copy deleted under clang; MWCC generated it, and `CFuncPointMngr::GetLight` and `CMap::GetCharaLight` assign points with it. Retail's bodies then compile unchanged.

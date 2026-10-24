@@ -66,6 +66,10 @@ RETAIL_BRIDGES = {
     ],
     "menucls1.cpp": [("CDC2Mes::DrawMsg()", "DrawMsg", "PortRetailDrawMsg")],
     "font.cpp": [("set2DSprite_Fuchi(mgCDrawPrim*,RECT,RECT,int,int)", "set2DSprite_Fuchi", "PortRetailSet2DSpriteFuchi")],
+    "nd_meswin.cpp": [
+        ("ClsMes::MakeMesWin(int)", "MakeMesWin", "PortRetailMakeMesWin"),
+        ("ClsMes::MakeMesWin(char*,int,int)", "MakeMesWin", "PortRetailMakeMesWin"),
+    ],
     "actionchara.cpp": [("CActionChara::DrawEffect()", "DrawEffect", "PortRetailDrawEffect")],
     "effscript.cpp": [
         ("CEffectScriptMan::Initialize(mgCMemory*,int,int)", "Initialize", "PortRetailInitialize"),

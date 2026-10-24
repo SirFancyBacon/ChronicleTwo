@@ -1176,5 +1176,21 @@
   "end": -90.0,
   "weight": 76.0,
   "dx": 0.0
+ },
+ "design": {
+  "t": {
+   "squash_above": [
+    494,
+    598
+   ]
+  },
+  "G": {
+   "widen": 64
+  }
+ },
+ "spacing": {
+  "stem_sidebearing": 80,
+  "depth": 48,
+  "space": 0.7
  }
 }
